@@ -472,7 +472,7 @@ with tab3:
         z_score = norm.ppf(target_service_level / 100.0)
     with p_col4:
         unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0)
-        ordering_cost = st.number_input("Ordering Cost ($/order)", value=250.0, step=50.0)
+        ordering_cost = st.number_input("Ordering Cost ($/order)", value=250.0, step=50.0, key="baseline_oc")
     with p_col5:
         holding_cost_pct = st.number_input("Annual Holding Cost (%)", value=20.0, step=1.0)
         holding_cost_annual = unit_cost * (holding_cost_pct / 100.0)
@@ -489,7 +489,18 @@ with tab3:
 
     # --- 2. Multi-Scenario Customization Setup ---
     st.divider()
-    st.subheader("2. Multi-Scenario Strategy Comparison")
+    
+    def sync_ordering_costs():
+        for i in range(5):  # Max slider value is 5
+            st.session_state[f"oc_key_{i}"] = st.session_state.baseline_oc
+
+    head_col1, head_col2 = st.columns([2, 1])
+    with head_col1:
+        st.subheader("2. Multi-Scenario Strategy Comparison")
+    with head_col2:
+        st.write("") # Spacing
+        st.button("📋 Sync Baseline Cost to All Scenarios", on_click=sync_ordering_costs)
+        
     st.markdown("Test the recommended baseline against custom strategies. Modify the review period to see the mathematically optimum target update instantly.")
     
     num_scenarios = st.slider("Select Number of Custom Scenarios to Compare:", min_value=1, max_value=5, value=2)
@@ -506,11 +517,20 @@ with tab3:
             
             u_pi = t_val + lead_time
             opt_target = (pr_avg_demand * u_pi) + (z_score * (pr_std_dev * np.sqrt(u_pi)))
-            
             st.caption(f"✨ **Optimum Target:** {int(opt_target)} Units")
             target_val = st.number_input(f"Target Level (Units)", value=int(opt_target), step=50, key=f"target_{i}")
             
-            scenarios_data.append({'name': f"Scenario {i+1}", 'T': t_val, 'Target': target_val})
+            if f"oc_key_{i}" not in st.session_state:
+                st.session_state[f"oc_key_{i}"] = ordering_cost
+                
+            oc_val = st.number_input(f"Ordering Cost ($)", step=10.0, key=f"oc_key_{i}")
+            
+            scenarios_data.append({
+                'name': f"Scenario {i+1}", 
+                'T': t_val, 
+                'Target': target_val, 
+                'OrderCost': oc_val
+            })
 
     # --- NumPy Optimized Simulation Engine ---
     np.random.seed(st.session_state.seed_counter)
@@ -563,18 +583,18 @@ with tab3:
             'avg_order_size': np.mean(order_sizes) if order_sizes else 0,
             'avg_inventory': holding_units_total / sim_days,
             'max_inventory': np.max(np.maximum(inventory_history, 0)),
-            'min_inventory': np.min(inventory_history),  # Captures true physical low or negative backorder depth
+            'min_inventory': np.min(inventory_history),
             'total_order_cost': total_order_cost,
             'total_holding_cost': total_holding_cost,
             'total_cost': total_order_cost + total_holding_cost
         }
 
-    # Execute simulations
+    # Execute simulations 
     res_baseline = simulate_periodic_system_vectorized(daily_demand_pr, review_period, lead_time, recommended_target, ordering_cost, holding_cost_daily)
     
     scenario_results = []
     for s in scenarios_data:
-        res = simulate_periodic_system_vectorized(daily_demand_pr, s['T'], lead_time, s['Target'], ordering_cost, holding_cost_daily)
+        res = simulate_periodic_system_vectorized(daily_demand_pr, s['T'], lead_time, s['Target'], s['OrderCost'], holding_cost_daily)
         scenario_results.append(res)
 
     # --- 3. Logically Bifurcated Summary Tables ---
@@ -630,20 +650,23 @@ with tab3:
     # 3C. Financial Matrix
     st.markdown("#### C. Financial Projections Matrix")
     fin_data = {
-        "Metric": ["Total Ordering Cost", "Total Holding Cost", "Total System Cost"]
+        "Metric": ["Applied Ordering Cost ($/order)", "Total Ordering Cost", "Total Holding Cost", "Total System Cost"]
     }
     fin_data["Recommended Baseline"] = [
-        fmt_usd(res_baseline['total_order_cost']), fmt_usd(res_baseline['total_holding_cost']), fmt_usd(res_baseline['total_cost'])
+        fmt_usd(ordering_cost), fmt_usd(res_baseline['total_order_cost']), 
+        fmt_usd(res_baseline['total_holding_cost']), fmt_usd(res_baseline['total_cost'])
     ]
     for idx, s in enumerate(scenarios_data):
         res = scenario_results[idx]
         fin_data[s['name']] = [
-            fmt_usd(res['total_order_cost']), fmt_usd(res['total_holding_cost']), fmt_usd(res['total_cost'])
+            fmt_usd(s['OrderCost']), fmt_usd(res['total_order_cost']), 
+            fmt_usd(res['total_holding_cost']), fmt_usd(res['total_cost'])
         ]
     st.dataframe(pd.DataFrame(fin_data), use_container_width=True, hide_index=True)
 
     # --- 4. Visual Bifurcation & Trajectory ---
     chart_col1, chart_col2 = st.columns([1, 1])
+    colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     
     with chart_col1:
         st.markdown("#### Cost Bifurcation Analysis")
@@ -670,7 +693,6 @@ with tab3:
             name='Baseline', line=dict(color='#1f77b4', width=3)
         ))
         
-        colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
         for idx, s in enumerate(scenarios_data):
             fig_comp.add_trace(go.Scatter(
                 x=list(range(sim_days_pr)), y=scenario_results[idx]['history'], mode='lines', 
@@ -684,7 +706,35 @@ with tab3:
         )
         st.plotly_chart(fig_comp, use_container_width=True)
 
-    # --- 5. Collapsible Raw Data Logs ---
+    # --- 5. Blocked Working Capital Chart ---
+    st.write("<br>", unsafe_allow_html=True)
+    st.markdown("#### 💰 Blocked Working Capital Trajectory")
+    st.caption("Visualizes the daily capital tied up on the warehouse floor (ignores backorders).")
+    
+    fig_wc = go.Figure()
+    
+    # Baseline WC
+    baseline_wc = np.maximum(res_baseline['history'], 0) * unit_cost
+    fig_wc.add_trace(go.Scatter(
+        x=list(range(sim_days_pr)), y=baseline_wc, mode='lines', 
+        name='Baseline', line=dict(color='#1f77b4', width=3)
+    ))
+    
+    # Scenarios WC
+    for idx, s in enumerate(scenarios_data):
+        scenario_wc = np.maximum(scenario_results[idx]['history'], 0) * unit_cost
+        fig_wc.add_trace(go.Scatter(
+            x=list(range(sim_days_pr)), y=scenario_wc, mode='lines', 
+            name=s['name'], line=dict(color=colors[idx], width=1.5, dash='dot')
+        ))
+        
+    fig_wc.update_layout(
+        template="plotly_white", xaxis_title="Simulation Day", yaxis_title="Capital Blocked ($)",
+        height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_wc, use_container_width=True)
+
+    # --- 6. Collapsible Raw Data Logs ---
     with st.expander("📋 View Daily Simulation Log Tables"):
         st.markdown("Raw 365-day tracking for Physical Inventory levels side-by-side.")
         
