@@ -839,7 +839,6 @@ with tab4:
     
     z_port = norm.ppf(port_service_lvl / 100.0)
     
-    # Independent protection intervals
     sync_pi = sync_review_period + port_lead_time
     stag_pi = stag_review_period + port_lead_time
     
@@ -849,24 +848,19 @@ with tab4:
     t_cols = st.columns(3)
     for i, s in enumerate(skus):
         with t_cols[i]:
-            # Calculate dual optimums
             sync_calc_targ = (s['mu'] * sync_pi) + (z_port * s['sd'] * np.sqrt(sync_pi))
             stag_calc_targ = (s['mu'] * stag_pi) + (z_port * s['sd'] * np.sqrt(stag_pi))
             
             st.markdown(f"#### {s['name']}")
-            
-            # Sync Input
             st.caption(f"🔵 **Sync Optimum:** {int(sync_calc_targ)} Units")
             sync_t = st.number_input("Sync Target Level", value=int(sync_calc_targ), step=10, key=f"sync_targ_{i}")
-            
-            # Staggered Input
             st.caption(f"⚪ **Stagger Optimum:** {int(stag_calc_targ)} Units")
             stag_t = st.number_input("Staggered Target Level", value=int(stag_calc_targ), step=10, key=f"stag_targ_{i}")
             
             sync_targets.append(sync_t)
             stag_targets.append(stag_t)
 
-    # --- 4. Matrix Simulation Engine (With Burn-in) ---
+    # --- 4. Matrix Simulation Engine (With Burn-in & Fill Rate Tracking) ---
     np.random.seed(st.session_state.seed_counter)
     
     burn_in_days = 60 
@@ -874,7 +868,6 @@ with tab4:
     total_sim_days = sim_days_actual + burn_in_days
     num_skus = len(skus)
     
-    # Generate extended Demand Matrix
     demand_matrix = np.zeros((total_sim_days, num_skus))
     for i, s in enumerate(skus):
         demand_matrix[:, i] = np.clip(np.random.normal(s['mu'], s['sd'], total_sim_days), 0, None).round(0)
@@ -887,18 +880,22 @@ with tab4:
         total_order_cost = 0
         total_deliveries = 0
         
+        # New arrays to track demand and fulfillment post burn-in for accurate fill rate
+        demand_post_burn = np.zeros(num_skus)
+        fulfilled_post_burn = np.zeros(num_skus)
+        
         for day in range(total_sim_days):
             current_inv += receipts[day]
             
-            # Fulfill demand
             fulfilled = np.minimum(np.maximum(current_inv, 0), d_matrix[day])
             current_inv -= fulfilled
             
-            # Record post burn-in
+            # Record post burn-in data
             if day >= burn_in_days:
                 inv_history[day - burn_in_days] = current_inv
+                demand_post_burn += d_matrix[day]
+                fulfilled_post_burn += fulfilled
             
-            # Review & Order Logic
             skus_to_review = [i for i in range(num_skus) if day >= offsets[i] and (day - offsets[i]) % T == 0]
             
             skus_ordered_today = 0
@@ -911,39 +908,42 @@ with tab4:
                     receipts[day + L, i] += order_qty
                     skus_ordered_today += 1
                     
-            # Accumulate costs post burn-in
             if skus_ordered_today > 0 and day >= burn_in_days:
                 total_order_cost += head_c + (skus_ordered_today * line_c)
                 total_deliveries += 1
                 
-        return inv_history, total_order_cost, total_deliveries
+        return inv_history, total_order_cost, total_deliveries, demand_post_burn, fulfilled_post_burn
 
-    # Run Strategies with decoupled review periods
-    # 1. Synchronized
+    # Run Strategies
     sync_offsets = [0, 0, 0]
-    sync_inv, sync_ord_cost, sync_deliv = simulate_portfolio(demand_matrix, sync_review_period, port_lead_time, sync_targets, header_cost, line_cost, sync_offsets)
+    sync_inv, sync_ord_cost, sync_deliv, sync_dem, sync_ful = simulate_portfolio(demand_matrix, sync_review_period, port_lead_time, sync_targets, header_cost, line_cost, sync_offsets)
     
-    # 2. Staggered
     stag_offsets = [0, stagger_days, stagger_days * 2]
-    stag_inv, stag_ord_cost, stag_deliv = simulate_portfolio(demand_matrix, stag_review_period, port_lead_time, stag_targets, header_cost, line_cost, stag_offsets)
+    stag_inv, stag_ord_cost, stag_deliv, stag_dem, stag_ful = simulate_portfolio(demand_matrix, stag_review_period, port_lead_time, stag_targets, header_cost, line_cost, stag_offsets)
 
-    # Calculate Working Capital Arrays
+    # Working Capital 
     unit_costs = np.array([s['uc'] for s in skus])
-    
     sync_wc_daily = np.sum(np.maximum(sync_inv, 0) * unit_costs, axis=1)
     stag_wc_daily = np.sum(np.maximum(stag_inv, 0) * unit_costs, axis=1)
     
-    # Cost KPIs
     hold_rate_daily = holding_pct / 100.0 / 365.0
     sync_hold_cost = np.sum(sync_wc_daily) * hold_rate_daily
     stag_hold_cost = np.sum(stag_wc_daily) * hold_rate_daily
 
-    # --- 5. Portfolio KPI Dashboard ---
+    # Fill Rates Calculation
+    sync_fr_arr = (sync_ful / sync_dem) * 100
+    stag_fr_arr = (stag_ful / stag_dem) * 100
+    
+    sync_port_fr = (np.sum(sync_ful) / np.sum(sync_dem)) * 100 if np.sum(sync_dem) > 0 else 0
+    stag_port_fr = (np.sum(stag_ful) / np.sum(stag_dem)) * 100 if np.sum(stag_dem) > 0 else 0
+
+    # --- 5. Portfolio KPI Dashboard & Matrices ---
     st.divider()
     st.subheader("4. Portfolio KPI Dashboard")
     
     def f_usd(v): return f"${v:,.0f}"
     
+    # Financial Scorecard
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.metric("Sync Peak Capital", f_usd(np.max(sync_wc_daily)))
@@ -962,39 +962,81 @@ with tab4:
         st.metric("Stagger Total System Cost", f_usd(stag_ord_cost + stag_hold_cost), 
                   delta=f_usd((stag_ord_cost + stag_hold_cost) - (sync_ord_cost + sync_hold_cost)), delta_color="inverse")
 
+    st.write("<br>", unsafe_allow_html=True)
+    mat_col1, mat_col2 = st.columns(2)
+    
+    # Logistics Matrix
+    with mat_col1:
+        st.markdown("#### 🚚 Logistics Delivery Matrix")
+        log_df = pd.DataFrame({
+            "Metric": ["Total Truck Deliveries / Events"],
+            "Synchronized": [f"{sync_deliv}"],
+            "Staggered": [f"{stag_deliv}"]
+        })
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        
+    # Fill Rate Matrix
+    with mat_col2:
+        st.markdown("#### 🎯 Service Level (Fill Rate) Matrix")
+        fr_data = {
+            "Item": [s['name'] for s in skus] + ["Portfolio Overall"],
+            "Sync Fill Rate": [f"{v:.2f}%" for v in sync_fr_arr] + [f"{sync_port_fr:.2f}%"],
+            "Staggered Fill Rate": [f"{v:.2f}%" for v in stag_fr_arr] + [f"{stag_port_fr:.2f}%"]
+        }
+        st.dataframe(pd.DataFrame(fr_data), use_container_width=True, hide_index=True)
+
     # --- 6. Visualizations ---
+    st.divider()
+    st.subheader("5. Strategic Visualizations")
+    
+    # 6A. Total Working Capital
     st.markdown("#### 📉 Total Blocked Working Capital Trajectory")
-    st.markdown("Notice how the **Staggered** strategy smooths out the massive capital and space spikes caused by receiving all inventory simultaneously.")
-    
     fig_port = go.Figure()
-    
-    # Synchronized Area
     fig_port.add_trace(go.Scatter(
         x=list(range(sim_days_actual)), y=sync_wc_daily, 
-        mode='lines', fill='tozeroy', 
-        name='Synchronized Strategy',
+        mode='lines', fill='tozeroy', name='Synchronized Strategy',
         line=dict(color='#d62728', width=2), fillcolor='rgba(214, 39, 40, 0.1)'
     ))
-    
-    # Staggered Area
     fig_port.add_trace(go.Scatter(
         x=list(range(sim_days_actual)), y=stag_wc_daily, 
-        mode='lines', fill='tozeroy', 
-        name='Staggered Strategy',
+        mode='lines', fill='tozeroy', name='Staggered Strategy',
         line=dict(color='#1f77b4', width=2), fillcolor='rgba(31, 119, 180, 0.3)'
     ))
-    
     fig_port.update_layout(
         template="plotly_white", xaxis_title="Simulation Day (Post Burn-In)", yaxis_title="Combined Capital Blocked ($)",
-        height=450, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig_port, use_container_width=True)
 
-    # --- Delivery Schedule Visualization ---
-    st.markdown("#### 🚚 Delivery Event Frequency (Logistics Impact)")
+    # 6B. SKU-Specific Inventory Trajectories
+    st.markdown("#### 📦 Individual SKU Physical Inventory")
+    st.caption("Compare physical unit levels for specific SKUs to see how decoupled review periods alter stock depth.")
     
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        st.info(f"**Synchronized Logistics:** {sync_deliv} Total Truck Deliveries / Events")
-    with col_d2:
-        st.warning(f"**Staggered Logistics:** {stag_deliv} Total Truck Deliveries / Events")
+    sku_tabs = st.tabs([s['name'] for s in skus])
+    
+    for i, s in enumerate(skus):
+        with sku_tabs[i]:
+            fig_sku = go.Figure()
+            
+            fig_sku.add_trace(go.Scatter(
+                x=list(range(sim_days_actual)), y=sync_inv[:, i], 
+                mode='lines', name=f"Synchronized ({sync_review_period}-Day Review)",
+                line=dict(color='#d62728', width=2)
+            ))
+            
+            fig_sku.add_trace(go.Scatter(
+                x=list(range(sim_days_actual)), y=stag_inv[:, i], 
+                mode='lines', name=f"Staggered ({stag_review_period}-Day Review)",
+                line=dict(color='#1f77b4', width=2, dash='dot')
+            ))
+            
+            fig_sku.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
+            
+            fig_sku.update_layout(
+                template="plotly_white", 
+                xaxis_title="Simulation Day (Post Burn-In)", 
+                yaxis_title="Physical Units On Hand",
+                height=350, 
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_sku, use_container_width=True)
