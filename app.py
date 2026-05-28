@@ -20,7 +20,7 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review"])
+tab1, tab2, tab3, tab4 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review", "📦 Multi-SKU Portfolio"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
@@ -757,3 +757,206 @@ with tab3:
             log_df.style.map(highlight_stockouts, subset=[c for c in log_df.columns if 'Inv' in c]), 
             use_container_width=True, hide_index=True
         )
+
+
+
+with tab4:
+    st.header("📦 Multi-SKU Portfolio Synchronization")
+    st.markdown("""
+    Evaluate the financial impact of your replenishment schedule across a portfolio of products. 
+    * **Synchronized Strategy:** Order all SKUs at once. Saves on logistics/freight costs (fewer deliveries), but causes massive spikes in working capital and warehouse space requirements.
+    * **Staggered Strategy:** Offset the review days for different SKUs. Increases delivery frequency (higher logistics costs), but smooths out the capital and space load, lowering peak warehouse capacity needs.
+    """)
+
+    # --- 1. Portfolio & Cost Parameter Setup ---
+    st.subheader("1. Portfolio Setup & Logistics Costs")
+    
+    col_setup1, col_setup2 = st.columns([3, 1])
+    
+    with col_setup1:
+        st.markdown("**SKU Demand Profiles**")
+        sku_cols = st.columns(3)
+        
+        # Pre-configured SKU Profiles (High, Med, Low Mover)
+        skus = []
+        with sku_cols[0]:
+            st.markdown("##### SKU A (Fast Mover)")
+            mu_a = st.number_input("Avg Demand", value=150.0, step=10.0, key="mu_a")
+            sd_a = st.number_input("Std Dev", value=30.0, step=5.0, key="sd_a")
+            uc_a = st.number_input("Unit Cost ($)", value=25.0, step=5.0, key="uc_a")
+            skus.append({'name': 'SKU A', 'mu': mu_a, 'sd': sd_a, 'uc': uc_a})
+            
+        with sku_cols[1]:
+            st.markdown("##### SKU B (Mid Mover)")
+            mu_b = st.number_input("Avg Demand", value=60.0, step=10.0, key="mu_b")
+            sd_b = st.number_input("Std Dev", value=15.0, step=5.0, key="sd_b")
+            uc_b = st.number_input("Unit Cost ($)", value=80.0, step=5.0, key="uc_b")
+            skus.append({'name': 'SKU B', 'mu': mu_b, 'sd': sd_b, 'uc': uc_b})
+            
+        with sku_cols[2]:
+            st.markdown("##### SKU C (Slow Mover)")
+            mu_c = st.number_input("Avg Demand", value=15.0, step=5.0, key="mu_c")
+            sd_c = st.number_input("Std Dev", value=8.0, step=2.0, key="sd_c")
+            uc_c = st.number_input("Unit Cost ($)", value=300.0, step=25.0, key="uc_c")
+            skus.append({'name': 'SKU C', 'mu': mu_c, 'sd': sd_c, 'uc': uc_c})
+
+    with col_setup2:
+        st.markdown("**System Costs**")
+        header_cost = st.number_input("Fixed Order Cost ($)", value=300.0, step=50.0, help="Cost per delivery/truck (Joint cost)")
+        line_cost = st.number_input("Line Item Cost ($)", value=20.0, step=5.0, help="Cost per specific SKU added to the order")
+        holding_pct = st.number_input("Annual Holding Rate (%)", value=20.0, step=1.0)
+
+    # --- 2. Policy Configuration ---
+    st.divider()
+    st.subheader("2. Policy Configuration")
+    
+    pol_c1, pol_c2, pol_c3 = st.columns(3)
+    with pol_c1:
+        port_review_period = st.number_input("Review Period ($T$ Days)", value=14, min_value=1)
+        port_lead_time = st.number_input("Lead Time ($L$ Days)", value=7, min_value=1)
+    with pol_c2:
+        stagger_days = st.number_input("Stagger Offset (Days)", value=4, min_value=1, help="Days between staggered SKU reviews")
+        port_service_lvl = st.slider("Target Service Level (%)", min_value=80.0, max_value=99.9, value=95.0, key="port_sl")
+    with pol_c3:
+        st.info(f"""
+        **Schedule Previews:**
+        * **Sync:** All SKUs review on Day 0, {port_review_period}, {port_review_period*2}...
+        * **Staggered:** - SKU A: Day 0, {port_review_period}...
+          - SKU B: Day {stagger_days}, {stagger_days+port_review_period}...
+          - SKU C: Day {stagger_days*2}, {(stagger_days*2)+port_review_period}...
+        """)
+
+    # Target Calculations
+    z_port = norm.ppf(port_service_lvl / 100.0)
+    pi_port = port_review_period + port_lead_time
+    
+    targets = []
+    for s in skus:
+        targ = (s['mu'] * pi_port) + (z_port * s['sd'] * np.sqrt(pi_port))
+        targets.append(targ)
+
+    # --- 3. Matrix Simulation Engine ---
+    np.random.seed(st.session_state.seed_counter)
+    sim_days = 365
+    num_skus = len(skus)
+    
+    # Generate Demand Matrix (Days x SKUs)
+    demand_matrix = np.zeros((sim_days, num_skus))
+    for i, s in enumerate(skus):
+        demand_matrix[:, i] = np.clip(np.random.normal(s['mu'], s['sd'], sim_days), 0, None).round(0)
+
+    def simulate_portfolio(d_matrix, T, L, targs, head_c, line_c, offsets):
+        inv_history = np.zeros((sim_days, num_skus))
+        receipts = np.zeros((sim_days + L + 1, num_skus))
+        current_inv = np.array(targs, dtype=float)
+        
+        total_order_cost = 0
+        total_deliveries = 0
+        
+        for day in range(sim_days):
+            current_inv += receipts[day]
+            
+            # Fulfill demand
+            fulfilled = np.minimum(np.maximum(current_inv, 0), d_matrix[day])
+            current_inv -= fulfilled
+            inv_history[day] = current_inv
+            
+            # Review & Order Logic
+            skus_to_review = [i for i in range(num_skus) if day >= offsets[i] and (day - offsets[i]) % T == 0]
+            
+            skus_ordered_today = 0
+            for i in skus_to_review:
+                on_order = np.sum(receipts[day+1:day+L+1, i])
+                inv_pos = current_inv[i] + on_order
+                
+                if inv_pos < targs[i]:
+                    order_qty = targs[i] - inv_pos
+                    receipts[day + L, i] += order_qty
+                    skus_ordered_today += 1
+                    
+            if skus_ordered_today > 0:
+                total_order_cost += head_c + (skus_ordered_today * line_c)
+                total_deliveries += 1
+                
+        return inv_history, total_order_cost, total_deliveries
+
+    # Run Strategies
+    # 1. Synchronized: All offsets = 0
+    sync_offsets = [0, 0, 0]
+    sync_inv, sync_ord_cost, sync_deliv = simulate_portfolio(demand_matrix, port_review_period, port_lead_time, targets, header_cost, line_cost, sync_offsets)
+    
+    # 2. Staggered: Offsets = [0, stagger, stagger*2]
+    stag_offsets = [0, stagger_days, stagger_days * 2]
+    stag_inv, stag_ord_cost, stag_deliv = simulate_portfolio(demand_matrix, port_review_period, port_lead_time, targets, header_cost, line_cost, stag_offsets)
+
+    # Calculate Working Capital Arrays
+    unit_costs = np.array([s['uc'] for s in skus])
+    
+    sync_wc_daily = np.sum(np.maximum(sync_inv, 0) * unit_costs, axis=1)
+    stag_wc_daily = np.sum(np.maximum(stag_inv, 0) * unit_costs, axis=1)
+    
+    # Cost KPIs
+    hold_rate_daily = holding_pct / 100.0 / 365.0
+    sync_hold_cost = np.sum(sync_wc_daily) * hold_rate_daily
+    stag_hold_cost = np.sum(stag_wc_daily) * hold_rate_daily
+
+    # --- 4. Portfolio KPI Dashboard ---
+    st.divider()
+    st.subheader("3. Portfolio KPI Dashboard")
+    
+    def f_usd(v): return f"${v:,.0f}"
+    
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("Sync Peak Capital", f_usd(np.max(sync_wc_daily)))
+        st.metric("Stagger Peak Capital", f_usd(np.max(stag_wc_daily)), 
+                  delta=f_usd(np.max(stag_wc_daily) - np.max(sync_wc_daily)), delta_color="inverse")
+    with k2:
+        st.metric("Sync Avg Capital", f_usd(np.mean(sync_wc_daily)))
+        st.metric("Stagger Avg Capital", f_usd(np.mean(stag_wc_daily)), 
+                  delta=f_usd(np.mean(stag_wc_daily) - np.mean(sync_wc_daily)), delta_color="inverse")
+    with k3:
+        st.metric("Sync Logistics Cost", f_usd(sync_ord_cost))
+        st.metric("Stagger Logistics Cost", f_usd(stag_ord_cost), 
+                  delta=f_usd(stag_ord_cost - sync_ord_cost), delta_color="inverse")
+    with k4:
+        st.metric("Sync Total System Cost", f_usd(sync_ord_cost + sync_hold_cost))
+        st.metric("Stagger Total System Cost", f_usd(stag_ord_cost + stag_hold_cost), 
+                  delta=f_usd((stag_ord_cost + stag_hold_cost) - (sync_ord_cost + sync_hold_cost)), delta_color="inverse")
+
+    # --- 5. Visualizations ---
+    st.markdown("#### 📉 Total Blocked Working Capital Trajectory")
+    st.markdown("Notice how the **Staggered** strategy smooths out the massive capital and space spikes caused by receiving all inventory simultaneously.")
+    
+    fig_port = go.Figure()
+    
+    # Synchronized Area
+    fig_port.add_trace(go.Scatter(
+        x=list(range(sim_days)), y=sync_wc_daily, 
+        mode='lines', fill='tozeroy', 
+        name='Synchronized Strategy',
+        line=dict(color='#d62728', width=2), fillcolor='rgba(214, 39, 40, 0.1)'
+    ))
+    
+    # Staggered Area
+    fig_port.add_trace(go.Scatter(
+        x=list(range(sim_days)), y=stag_wc_daily, 
+        mode='lines', fill='tozeroy', 
+        name='Staggered Strategy',
+        line=dict(color='#1f77b4', width=2), fillcolor='rgba(31, 119, 180, 0.3)'
+    ))
+    
+    fig_port.update_layout(
+        template="plotly_white", xaxis_title="Simulation Day", yaxis_title="Combined Capital Blocked ($)",
+        height=450, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_port, use_container_width=True)
+
+    # --- Delivery Schedule Visualization ---
+    st.markdown("#### 🚚 Delivery Event Frequency (Logistics Impact)")
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        st.info(f"**Synchronized Logistics:** {sync_deliv} Total Truck Deliveries")
+    with col_d2:
+        st.warning(f"**Staggered Logistics:** {stag_deliv} Total Truck Deliveries")
