@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+plotly
+xlsxwriter
+openpyxl
+prophet
+holidays
+scipy
