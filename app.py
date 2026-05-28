@@ -764,8 +764,8 @@ with tab4:
     st.header("📦 Multi-SKU Portfolio Synchronization")
     st.markdown("""
     Evaluate the financial impact of your replenishment schedule across a portfolio of products. 
-    * **Synchronized Strategy:** Order all SKUs at once. Saves on logistics/freight costs (fewer deliveries), but causes massive spikes in working capital and warehouse space requirements.
-    * **Staggered Strategy:** Offset the review days for different SKUs. Increases delivery frequency (higher logistics costs), but smooths out the capital and space load, lowering peak warehouse capacity needs.
+    * **Synchronized Strategy:** Order all SKUs at once. Saves on logistics/freight costs but shares vehicle capacity, requiring a shorter review period (more frequent orders).
+    * **Staggered Strategy:** Offset the review days for different SKUs. Dedicates vehicle capacity to single SKUs, allowing for larger orders and longer review periods, while smoothing out peak capital.
     """)
 
     # --- Action: Regenerate Demand Button ---
@@ -813,11 +813,12 @@ with tab4:
 
     # --- 2. Policy Configuration ---
     st.divider()
-    st.subheader("2. Policy Configuration")
+    st.subheader("2. Policy Configuration (Capacity-Adjusted)")
     
     pol_c1, pol_c2, pol_c3 = st.columns(3)
     with pol_c1:
-        port_review_period = st.number_input("Review Period ($T$ Days)", value=14, min_value=1)
+        sync_review_period = st.number_input("Sync Review Period ($T_1$)", value=7, min_value=1, help="Shorter period due to shared vehicle capacity.")
+        stag_review_period = st.number_input("Staggered Review Period ($T_2$)", value=14, min_value=1, help="Longer period enabled by dedicated vehicle capacity.")
         port_lead_time = st.number_input("Lead Time ($L$ Days)", value=7, min_value=1)
     with pol_c2:
         stagger_days = st.number_input("Stagger Offset (Days)", value=4, min_value=1, help="Days between staggered SKU reviews")
@@ -825,19 +826,22 @@ with tab4:
     with pol_c3:
         st.info(f"""
         **Schedule Previews:**
-        * **Sync:** All SKUs review on Day 0, {port_review_period}, {port_review_period*2}...
-        * **Staggered:** - SKU A: Day 0, {port_review_period}...
-          - SKU B: Day {stagger_days}, {stagger_days+port_review_period}...
-          - SKU C: Day {stagger_days*2}, {(stagger_days*2)+port_review_period}...
+        * **Sync:** All SKUs review on Day 0, {sync_review_period}, {sync_review_period*2}...
+        * **Staggered:** - SKU A: Day 0, {stag_review_period}...
+          - SKU B: Day {stagger_days}, {stagger_days+stag_review_period}...
+          - SKU C: Day {stagger_days*2}, {(stagger_days*2)+stag_review_period}...
         """)
 
     # --- 3. Target Level Overrides ---
     st.divider()
     st.subheader("3. SKU Target Level Configuration")
-    st.markdown("The system calculates mathematical optimums, but you can override the target levels for both strategies below.")
+    st.markdown("Optimal target levels are dynamically calculated below based on the distinct review periods for each strategy.")
     
     z_port = norm.ppf(port_service_lvl / 100.0)
-    pi_port = port_review_period + port_lead_time
+    
+    # Independent protection intervals
+    sync_pi = sync_review_period + port_lead_time
+    stag_pi = stag_review_period + port_lead_time
     
     sync_targets = []
     stag_targets = []
@@ -845,13 +849,19 @@ with tab4:
     t_cols = st.columns(3)
     for i, s in enumerate(skus):
         with t_cols[i]:
-            calc_targ = (s['mu'] * pi_port) + (z_port * s['sd'] * np.sqrt(pi_port))
+            # Calculate dual optimums
+            sync_calc_targ = (s['mu'] * sync_pi) + (z_port * s['sd'] * np.sqrt(sync_pi))
+            stag_calc_targ = (s['mu'] * stag_pi) + (z_port * s['sd'] * np.sqrt(stag_pi))
             
             st.markdown(f"#### {s['name']}")
-            st.caption(f"✨ **Calculated Optimum:** {int(calc_targ)} Units")
             
-            sync_t = st.number_input("Sync Target Level", value=int(calc_targ), step=10, key=f"sync_targ_{i}")
-            stag_t = st.number_input("Staggered Target Level", value=int(calc_targ), step=10, key=f"stag_targ_{i}")
+            # Sync Input
+            st.caption(f"🔵 **Sync Optimum:** {int(sync_calc_targ)} Units")
+            sync_t = st.number_input("Sync Target Level", value=int(sync_calc_targ), step=10, key=f"sync_targ_{i}")
+            
+            # Staggered Input
+            st.caption(f"⚪ **Stagger Optimum:** {int(stag_calc_targ)} Units")
+            stag_t = st.number_input("Staggered Target Level", value=int(stag_calc_targ), step=10, key=f"stag_targ_{i}")
             
             sync_targets.append(sync_t)
             stag_targets.append(stag_t)
@@ -859,7 +869,6 @@ with tab4:
     # --- 4. Matrix Simulation Engine (With Burn-in) ---
     np.random.seed(st.session_state.seed_counter)
     
-    # We add 60 days of "Burn-In" to let the supply chain stabilize before we start recording metrics
     burn_in_days = 60 
     sim_days_actual = 365
     total_sim_days = sim_days_actual + burn_in_days
@@ -885,7 +894,7 @@ with tab4:
             fulfilled = np.minimum(np.maximum(current_inv, 0), d_matrix[day])
             current_inv -= fulfilled
             
-            # Only start recording history AFTER the burn-in period is over
+            # Record post burn-in
             if day >= burn_in_days:
                 inv_history[day - burn_in_days] = current_inv
             
@@ -902,21 +911,21 @@ with tab4:
                     receipts[day + L, i] += order_qty
                     skus_ordered_today += 1
                     
-            # Only accumulate costs and logistics metrics AFTER the burn-in period
+            # Accumulate costs post burn-in
             if skus_ordered_today > 0 and day >= burn_in_days:
                 total_order_cost += head_c + (skus_ordered_today * line_c)
                 total_deliveries += 1
                 
         return inv_history, total_order_cost, total_deliveries
 
-    # Run Strategies
+    # Run Strategies with decoupled review periods
     # 1. Synchronized
     sync_offsets = [0, 0, 0]
-    sync_inv, sync_ord_cost, sync_deliv = simulate_portfolio(demand_matrix, port_review_period, port_lead_time, sync_targets, header_cost, line_cost, sync_offsets)
+    sync_inv, sync_ord_cost, sync_deliv = simulate_portfolio(demand_matrix, sync_review_period, port_lead_time, sync_targets, header_cost, line_cost, sync_offsets)
     
     # 2. Staggered
     stag_offsets = [0, stagger_days, stagger_days * 2]
-    stag_inv, stag_ord_cost, stag_deliv = simulate_portfolio(demand_matrix, port_review_period, port_lead_time, stag_targets, header_cost, line_cost, stag_offsets)
+    stag_inv, stag_ord_cost, stag_deliv = simulate_portfolio(demand_matrix, stag_review_period, port_lead_time, stag_targets, header_cost, line_cost, stag_offsets)
 
     # Calculate Working Capital Arrays
     unit_costs = np.array([s['uc'] for s in skus])
