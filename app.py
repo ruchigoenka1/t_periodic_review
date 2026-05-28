@@ -20,7 +20,7 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review", "Demand Simulator Game", "Age Analysis", "Inventory Audit"])
+tab1, tab2, tab3 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
