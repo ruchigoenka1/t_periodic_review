@@ -475,7 +475,6 @@ with tab3:
         ordering_cost = st.number_input("Ordering Cost ($/order)", value=250.0, step=50.0)
     with p_col5:
         holding_cost_pct = st.number_input("Annual Holding Cost (%)", value=20.0, step=1.0)
-        # Convert % to absolute dollar value for calculations
         holding_cost_annual = unit_cost * (holding_cost_pct / 100.0)
         holding_cost_daily = holding_cost_annual / 365.0
 
@@ -502,17 +501,13 @@ with tab3:
         with col:
             st.markdown(f"##### Scenario {i+1}")
             
-            # Default to slightly different review periods for easy initial comparison
             default_t = int(review_period + ((i+1) * 7)) 
-            
             t_val = st.number_input(f"Review Period (Days)", value=default_t, min_value=1, step=1, key=f"t_{i}")
             
-            # Instantly calculate the math optimum for the user's selected Review Period
             u_pi = t_val + lead_time
             opt_target = (pr_avg_demand * u_pi) + (z_score * (pr_std_dev * np.sqrt(u_pi)))
             
             st.caption(f"✨ **Optimum Target:** {int(opt_target)} Units")
-            
             target_val = st.number_input(f"Target Level (Units)", value=int(opt_target), step=50, key=f"target_{i}")
             
             scenarios_data.append({'name': f"Scenario {i+1}", 'T': t_val, 'Target': target_val})
@@ -528,7 +523,7 @@ with tab3:
         receipts = np.zeros(sim_days + L + 1) 
         
         current_inv = target
-        orders_placed = 0
+        order_sizes = []
         units_fulfilled = 0
         
         for day in range(sim_days):
@@ -548,9 +543,10 @@ with tab3:
                 if inv_position < target:
                     order_qty = target - inv_position
                     receipts[day + L] += order_qty
-                    orders_placed += 1
+                    order_sizes.append(order_qty)
                     
         holding_units_total = np.sum(np.maximum(inventory_history, 0))
+        orders_placed = len(order_sizes)
         total_order_cost = orders_placed * order_c
         total_holding_cost = holding_units_total * hold_c_daily
         total_demand_sim = np.sum(demand_array)
@@ -562,8 +558,12 @@ with tab3:
             'lost_sales': total_demand_sim - units_fulfilled,
             'fill_rate': (units_fulfilled / total_demand_sim) * 100 if total_demand_sim > 0 else 0,
             'orders_placed': orders_placed,
+            'min_order_size': np.min(order_sizes) if order_sizes else 0,
+            'max_order_size': np.max(order_sizes) if order_sizes else 0,
+            'avg_order_size': np.mean(order_sizes) if order_sizes else 0,
             'avg_inventory': holding_units_total / sim_days,
             'max_inventory': np.max(np.maximum(inventory_history, 0)),
+            'min_inventory': np.min(inventory_history),  # Captures true physical low or negative backorder depth
             'total_order_cost': total_order_cost,
             'total_holding_cost': total_holding_cost,
             'total_cost': total_order_cost + total_holding_cost
@@ -577,63 +577,76 @@ with tab3:
         res = simulate_periodic_system_vectorized(daily_demand_pr, s['T'], lead_time, s['Target'], ordering_cost, holding_cost_daily)
         scenario_results.append(res)
 
-    # --- 3. Comparative Summary Table ---
+    # --- 3. Logically Bifurcated Summary Tables ---
     st.divider()
     st.markdown("### 📊 Policy Comparison & KPI Summary")
     
     def fmt_usd(val): return f"${val:,.2f}"
     
-    table_data = {
-        "Performance Metric": [
+    # 3A. Operational Health Matrix
+    st.markdown("#### A. Operational & Capital Health Matrix")
+    ops_data = {
+        "Metric": [
             "Review Interval", 
             "Target Inventory Level", 
             "Fill Rate (%)", 
             "Lost Sales (Units)", 
+            "Min Inventory Level (Depth)",
             "Avg Working Capital", 
-            "Max Working Capital", 
-            "Total Ordering Cost", 
-            "Total Holding Cost", 
-            "Total System Cost"
+            "Max Working Capital"
         ]
     }
-    
-    # Add Baseline Column
-    table_data["Recommended Baseline"] = [
-        f"{review_period} Days", 
-        f"{int(recommended_target)}", 
-        f"{res_baseline['fill_rate']:.2f}%", 
-        f"{int(res_baseline['lost_sales'])}", 
-        fmt_usd(res_baseline['avg_inventory'] * unit_cost), 
-        fmt_usd(res_baseline['max_inventory'] * unit_cost), 
-        fmt_usd(res_baseline['total_order_cost']), 
-        fmt_usd(res_baseline['total_holding_cost']), 
-        fmt_usd(res_baseline['total_cost'])
+    ops_data["Recommended Baseline"] = [
+        f"{review_period} Days", f"{int(recommended_target)}", f"{res_baseline['fill_rate']:.2f}%", 
+        f"{int(res_baseline['lost_sales'])}", f"{int(res_baseline['min_inventory'])}",
+        fmt_usd(res_baseline['avg_inventory'] * unit_cost), fmt_usd(res_baseline['max_inventory'] * unit_cost)
     ]
-    
-    # Add Scenario Columns
     for idx, s in enumerate(scenarios_data):
         res = scenario_results[idx]
-        table_data[s['name']] = [
-            f"{s['T']} Days", 
-            f"{int(s['Target'])}", 
-            f"{res['fill_rate']:.2f}%", 
-            f"{int(res['lost_sales'])}", 
-            fmt_usd(res['avg_inventory'] * unit_cost), 
-            fmt_usd(res['max_inventory'] * unit_cost), 
-            fmt_usd(res['total_order_cost']), 
-            fmt_usd(res['total_holding_cost']), 
-            fmt_usd(res['total_cost'])
+        ops_data[s['name']] = [
+            f"{s['T']} Days", f"{int(s['Target'])}", f"{res['fill_rate']:.2f}%", 
+            f"{int(res['lost_sales'])}", f"{int(res['min_inventory'])}",
+            fmt_usd(res['avg_inventory'] * unit_cost), fmt_usd(res['max_inventory'] * unit_cost)
         ]
+    st.dataframe(pd.DataFrame(ops_data), use_container_width=True, hide_index=True)
 
-    comp_df = pd.DataFrame(table_data)
-    st.dataframe(comp_df, use_container_width=True, hide_index=True)
+    # 3B. Order Dynamics Matrix
+    st.markdown("#### B. Order Dynamics Matrix")
+    order_data = {
+        "Metric": ["Total No. of Orders", "Average Order Size", "Minimum Order Size", "Maximum Order Size"]
+    }
+    order_data["Recommended Baseline"] = [
+        f"{res_baseline['orders_placed']}", f"{int(res_baseline['avg_order_size'])} Units", 
+        f"{int(res_baseline['min_order_size'])} Units", f"{int(res_baseline['max_order_size'])} Units"
+    ]
+    for idx, s in enumerate(scenarios_data):
+        res = scenario_results[idx]
+        order_data[s['name']] = [
+            f"{res['orders_placed']}", f"{int(res['avg_order_size'])} Units", 
+            f"{int(res['min_order_size'])} Units", f"{int(res['max_order_size'])} Units"
+        ]
+    st.dataframe(pd.DataFrame(order_data), use_container_width=True, hide_index=True)
+
+    # 3C. Financial Matrix
+    st.markdown("#### C. Financial Projections Matrix")
+    fin_data = {
+        "Metric": ["Total Ordering Cost", "Total Holding Cost", "Total System Cost"]
+    }
+    fin_data["Recommended Baseline"] = [
+        fmt_usd(res_baseline['total_order_cost']), fmt_usd(res_baseline['total_holding_cost']), fmt_usd(res_baseline['total_cost'])
+    ]
+    for idx, s in enumerate(scenarios_data):
+        res = scenario_results[idx]
+        fin_data[s['name']] = [
+            fmt_usd(res['total_order_cost']), fmt_usd(res['total_holding_cost']), fmt_usd(res['total_cost'])
+        ]
+    st.dataframe(pd.DataFrame(fin_data), use_container_width=True, hide_index=True)
 
     # --- 4. Visual Bifurcation & Trajectory ---
     chart_col1, chart_col2 = st.columns([1, 1])
     
     with chart_col1:
         st.markdown("#### Cost Bifurcation Analysis")
-        # Compile data for stacked bar chart
         names = ["Baseline"] + [s['name'] for s in scenarios_data]
         order_costs = [res_baseline['total_order_cost']] + [r['total_order_cost'] for r in scenario_results]
         hold_costs = [res_baseline['total_holding_cost']] + [r['total_holding_cost'] for r in scenario_results]
@@ -643,11 +656,8 @@ with tab3:
             go.Bar(name='Holding Cost', x=names, y=hold_costs, marker_color='#1f77b4')
         ])
         fig_cost.update_layout(
-            barmode='stack', 
-            template="plotly_white",
-            yaxis_title="Total Cost ($)",
-            height=400,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            barmode='stack', template="plotly_white", yaxis_title="Total Cost ($)",
+            height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig_cost, use_container_width=True)
 
@@ -655,13 +665,11 @@ with tab3:
         st.markdown("#### Physical Inventory Trajectory")
         fig_comp = go.Figure()
         
-        # Plot Baseline
         fig_comp.add_trace(go.Scatter(
             x=list(range(sim_days_pr)), y=res_baseline['history'], mode='lines', 
             name='Baseline', line=dict(color='#1f77b4', width=3)
         ))
         
-        # Plot Scenarios
         colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
         for idx, s in enumerate(scenarios_data):
             fig_comp.add_trace(go.Scatter(
