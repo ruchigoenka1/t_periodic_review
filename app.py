@@ -462,7 +462,7 @@ with tab2:
             st.info(explanation)
 
 
-  with tab3:
+with tab3:
     st.header("🔄 Periodic Review Analysis (Target-Level System)")
     
     st.markdown("""
