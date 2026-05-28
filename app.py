@@ -460,22 +460,26 @@ with tab3:
     # --- 1. Baseline System Parameters Input ---
     st.subheader("1. Supply Chain Parameters & Recommended Baseline")
     
-    p_col1, p_col2, p_col3, p_col4 = st.columns(4)
+    p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns(5)
     with p_col1:
-        pr_avg_demand = st.number_input("Average Daily Demand", value=100.0, step=10.0)
+        pr_avg_demand = st.number_input("Avg Daily Demand", value=100.0, step=10.0)
         pr_std_dev = st.number_input("Demand Std Dev", value=15.0, step=5.0)
     with p_col2:
-        review_period = st.number_input("Recommended Review Period (Days)", value=14, min_value=1, step=1)
+        review_period = st.number_input("Recommended Review (Days)", value=14, min_value=1, step=1)
         lead_time = st.number_input("Lead Time (Days)", value=7, min_value=1, step=1)
     with p_col3:
         target_service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1)
         z_score = norm.ppf(target_service_level / 100.0)
     with p_col4:
-        ordering_cost = st.number_input("Ordering Cost ($ per order)", value=250.0, step=50.0)
-        holding_cost_annual = st.number_input("Annual Holding Cost ($ per unit)", value=15.0, step=1.0)
+        unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0)
+        ordering_cost = st.number_input("Ordering Cost ($/order)", value=250.0, step=50.0)
+    with p_col5:
+        holding_cost_pct = st.number_input("Annual Holding Cost (%)", value=20.0, step=1.0)
+        # Convert % to absolute dollar value for calculations
+        holding_cost_annual = unit_cost * (holding_cost_pct / 100.0)
         holding_cost_daily = holding_cost_annual / 365.0
 
-    # Calculate Recommended Target
+    # Calculate Recommended Baseline Target
     protection_interval = review_period + lead_time
     expected_demand_pi = pr_avg_demand * protection_interval
     std_dev_pi = pr_std_dev * np.sqrt(protection_interval)
@@ -484,33 +488,43 @@ with tab3:
 
     st.info(f"**Calculated Baseline Target:** {int(recommended_target)} Units (Accommodating a {review_period}-day review cycle and {lead_time}-day lead time).")
 
-    # --- 2. User Comparative Strategy Input ---
+    # --- 2. Multi-Scenario Customization Setup ---
     st.divider()
-    st.subheader("2. Comparative Strategy Setup")
-    st.markdown("Test the recommended baseline against a custom review period and target level.")
+    st.subheader("2. Multi-Scenario Strategy Comparison")
+    st.markdown("Test the recommended baseline against custom strategies. Modify the review period to see the mathematically optimum target update instantly.")
     
-    u_col1, u_col2, u_col3 = st.columns(3)
-    with u_col1:
-        user_review_period = st.number_input("User Review Period (Days)", value=int(review_period + 7), min_value=1, step=1)
-    with u_col2:
-        u_pi = user_review_period + lead_time
-        u_expected_demand = pr_avg_demand * u_pi
-        u_safety_stock = z_score * (pr_std_dev * np.sqrt(u_pi))
-        u_suggested_target = u_expected_demand + u_safety_stock
-        user_target = st.number_input("User Target Level", value=int(u_suggested_target), step=50)
-    with u_col3:
-        st.caption("<br>Modify your review period frequency and inventory target to see how capital allocation and physical fulfillment shift.", unsafe_allow_html=True)
+    num_scenarios = st.slider("Select Number of Custom Scenarios to Compare:", min_value=1, max_value=5, value=2)
+    
+    scenarios_data = []
+    s_cols = st.columns(num_scenarios)
+    
+    for i, col in enumerate(s_cols):
+        with col:
+            st.markdown(f"##### Scenario {i+1}")
+            
+            # Default to slightly different review periods for easy initial comparison
+            default_t = int(review_period + ((i+1) * 7)) 
+            
+            t_val = st.number_input(f"Review Period (Days)", value=default_t, min_value=1, step=1, key=f"t_{i}")
+            
+            # Instantly calculate the math optimum for the user's selected Review Period
+            u_pi = t_val + lead_time
+            opt_target = (pr_avg_demand * u_pi) + (z_score * (pr_std_dev * np.sqrt(u_pi)))
+            
+            st.caption(f"✨ **Optimum Target:** {int(opt_target)} Units")
+            
+            target_val = st.number_input(f"Target Level (Units)", value=int(opt_target), step=50, key=f"target_{i}")
+            
+            scenarios_data.append({'name': f"Scenario {i+1}", 'T': t_val, 'Target': target_val})
 
     # --- NumPy Optimized Simulation Engine ---
     np.random.seed(st.session_state.seed_counter)
     sim_days_pr = 365
     daily_demand_pr = np.clip(np.random.normal(pr_avg_demand, pr_std_dev, sim_days_pr), 0, None).round(0)
 
-    # High-Performance Vectorized Logic Setup
     def simulate_periodic_system_vectorized(demand_array, T, L, target, order_c, hold_c_daily):
         sim_days = len(demand_array)
         inventory_history = np.zeros(sim_days)
-        # Pre-allocate array for receipts. Padded by L to handle end-of-sim arrivals without index errors
         receipts = np.zeros(sim_days + L + 1) 
         
         current_inv = target
@@ -518,20 +532,16 @@ with tab3:
         units_fulfilled = 0
         
         for day in range(sim_days):
-            # 1. Receive pipeline inventory via direct array lookup (O(1) time)
             current_inv += receipts[day]
-            
-            # 2. Fulfill demand mathematically 
             current_demand = demand_array[day]
+            
             fulfilled = min(max(current_inv, 0), current_demand)
             current_inv -= fulfilled
             units_fulfilled += fulfilled
             
             inventory_history[day] = current_inv
             
-            # 3. Review and Order Logic
             if day % T == 0:
-                # Pipeline is rapidly calculated via array slicing instead of list iteration
                 on_order = np.sum(receipts[day+1:day+L+1])
                 inv_position = current_inv + on_order
                 
@@ -540,135 +550,152 @@ with tab3:
                     receipts[day + L] += order_qty
                     orders_placed += 1
                     
-        # Apply Vectorized math for final KPI aggregations
         holding_units_total = np.sum(np.maximum(inventory_history, 0))
         total_order_cost = orders_placed * order_c
         total_holding_cost = holding_units_total * hold_c_daily
+        total_demand_sim = np.sum(demand_array)
         
         return {
             'history': inventory_history,
-            'total_demand': np.sum(demand_array),
+            'total_demand': total_demand_sim,
             'units_fulfilled': units_fulfilled,
+            'lost_sales': total_demand_sim - units_fulfilled,
+            'fill_rate': (units_fulfilled / total_demand_sim) * 100 if total_demand_sim > 0 else 0,
             'orders_placed': orders_placed,
             'avg_inventory': holding_units_total / sim_days,
+            'max_inventory': np.max(np.maximum(inventory_history, 0)),
             'total_order_cost': total_order_cost,
             'total_holding_cost': total_holding_cost,
             'total_cost': total_order_cost + total_holding_cost
         }
 
-    # Execute simulation
-    res_recommended = simulate_periodic_system_vectorized(daily_demand_pr, review_period, lead_time, recommended_target, ordering_cost, holding_cost_daily)
-    res_user = simulate_periodic_system_vectorized(daily_demand_pr, user_review_period, lead_time, user_target, ordering_cost, holding_cost_daily)
+    # Execute simulations
+    res_baseline = simulate_periodic_system_vectorized(daily_demand_pr, review_period, lead_time, recommended_target, ordering_cost, holding_cost_daily)
+    
+    scenario_results = []
+    for s in scenarios_data:
+        res = simulate_periodic_system_vectorized(daily_demand_pr, s['T'], lead_time, s['Target'], ordering_cost, holding_cost_daily)
+        scenario_results.append(res)
 
-    # --- 3. KPI Dashboard ---
+    # --- 3. Comparative Summary Table ---
     st.divider()
-    st.subheader("3. Strategy KPI Dashboard")
+    st.markdown("### 📊 Policy Comparison & KPI Summary")
     
-    kpi_col1, kpi_col2 = st.columns(2)
+    def fmt_usd(val): return f"${val:,.2f}"
     
-    with kpi_col1:
-        st.markdown(f"#### 🔵 Recommended Policy ({review_period}-Day)")
-        st.metric("Total System Cost", f"${res_recommended['total_cost']:,.2f}")
-        st.markdown(f"**Total Physical Demand:** {int(res_recommended['total_demand'])} units")
-        st.markdown(f"**Total Physical Fulfilled:** {int(res_recommended['units_fulfilled'])} units")
-        st.markdown(f"**Average Physical Inventory:** {int(res_recommended['avg_inventory'])} units")
-        st.markdown(f"**Total Orders Placed:** {res_recommended['orders_placed']}")
-        
-    with kpi_col2:
-        st.markdown(f"#### ⚪ User Policy ({user_review_period}-Day)")
-        cost_diff = res_user['total_cost'] - res_recommended['total_cost']
-        st.metric(
-            "Total System Cost", 
-            f"${res_user['total_cost']:,.2f}", 
-            delta=f"{'+' if cost_diff > 0 else ''}${cost_diff:,.2f} vs Recommended",
-            delta_color="inverse"
-        )
-        st.markdown(f"**Total Physical Demand:** {int(res_user['total_demand'])} units")
-        st.markdown(f"**Total Physical Fulfilled:** {int(res_user['units_fulfilled'])} units")
-        st.markdown(f"**Average Physical Inventory:** {int(res_user['avg_inventory'])} units")
-        st.markdown(f"**Total Orders Placed:** {res_user['orders_placed']}")
-
-    # --- 4. Comparative Summary Table ---
-    st.markdown("#### 📊 Policy Comparison Summary")
-    
-    comp_df = pd.DataFrame({
+    table_data = {
         "Performance Metric": [
             "Review Interval", 
             "Target Inventory Level", 
-            "Physical Units Fulfilled", 
-            "Order Frequency", 
-            "Avg Inventory Carried", 
-            "Total Cost Projection"
-        ],
-        "Recommended Policy": [
-            f"{review_period} Days", 
-            f"{int(recommended_target)} Units", 
-            f"{int(res_recommended['units_fulfilled'])}", 
-            f"{res_recommended['orders_placed']} Orders", 
-            f"{int(res_recommended['avg_inventory'])} Units", 
-            f"${res_recommended['total_cost']:,.2f}"
-        ],
-        "User Policy": [
-            f"{user_review_period} Days", 
-            f"{int(user_target)} Units", 
-            f"{int(res_user['units_fulfilled'])}", 
-            f"{res_user['orders_placed']} Orders", 
-            f"{int(res_user['avg_inventory'])} Units", 
-            f"${res_user['total_cost']:,.2f}"
+            "Fill Rate (%)", 
+            "Lost Sales (Units)", 
+            "Avg Working Capital", 
+            "Max Working Capital", 
+            "Total Ordering Cost", 
+            "Total Holding Cost", 
+            "Total System Cost"
         ]
-    })
+    }
     
+    # Add Baseline Column
+    table_data["Recommended Baseline"] = [
+        f"{review_period} Days", 
+        f"{int(recommended_target)}", 
+        f"{res_baseline['fill_rate']:.2f}%", 
+        f"{int(res_baseline['lost_sales'])}", 
+        fmt_usd(res_baseline['avg_inventory'] * unit_cost), 
+        fmt_usd(res_baseline['max_inventory'] * unit_cost), 
+        fmt_usd(res_baseline['total_order_cost']), 
+        fmt_usd(res_baseline['total_holding_cost']), 
+        fmt_usd(res_baseline['total_cost'])
+    ]
+    
+    # Add Scenario Columns
+    for idx, s in enumerate(scenarios_data):
+        res = scenario_results[idx]
+        table_data[s['name']] = [
+            f"{s['T']} Days", 
+            f"{int(s['Target'])}", 
+            f"{res['fill_rate']:.2f}%", 
+            f"{int(res['lost_sales'])}", 
+            fmt_usd(res['avg_inventory'] * unit_cost), 
+            fmt_usd(res['max_inventory'] * unit_cost), 
+            fmt_usd(res['total_order_cost']), 
+            fmt_usd(res['total_holding_cost']), 
+            fmt_usd(res['total_cost'])
+        ]
+
+    comp_df = pd.DataFrame(table_data)
     st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-    # --- 5. Visual Trajectory Chart ---
-    st.markdown("#### 📉 Physical Inventory Trajectory")
+    # --- 4. Visual Bifurcation & Trajectory ---
+    chart_col1, chart_col2 = st.columns([1, 1])
     
-    fig_comp = go.Figure()
-    
-    # Recommended Trace (Solid Blue)
-    fig_comp.add_trace(go.Scatter(
-        x=list(range(sim_days_pr)), 
-        y=res_recommended['history'], 
-        mode='lines', 
-        name=f'Recommended ({review_period}-Day)',
-        line=dict(color='#1f77b4', width=2)
-    ))
-    
-    # User Trace (Light Blue / Dashed)
-    fig_comp.add_trace(go.Scatter(
-        x=list(range(sim_days_pr)), 
-        y=res_user['history'], 
-        mode='lines', 
-        name=f'User Policy ({user_review_period}-Day)',
-        line=dict(color='#85c1e9', width=2, dash='dot')
-    ))
-    
-    fig_comp.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
-    
-    fig_comp.update_layout(
-        template="plotly_white",
-        xaxis_title="Simulation Day",
-        yaxis_title="Physical Units On Hand",
-        height=400,
-        margin=dict(t=20, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    
-    st.plotly_chart(fig_comp, use_container_width=True)
+    with chart_col1:
+        st.markdown("#### Cost Bifurcation Analysis")
+        # Compile data for stacked bar chart
+        names = ["Baseline"] + [s['name'] for s in scenarios_data]
+        order_costs = [res_baseline['total_order_cost']] + [r['total_order_cost'] for r in scenario_results]
+        hold_costs = [res_baseline['total_holding_cost']] + [r['total_holding_cost'] for r in scenario_results]
+        
+        fig_cost = go.Figure(data=[
+            go.Bar(name='Ordering Cost', x=names, y=order_costs, marker_color='#2ca02c'),
+            go.Bar(name='Holding Cost', x=names, y=hold_costs, marker_color='#1f77b4')
+        ])
+        fig_cost.update_layout(
+            barmode='stack', 
+            template="plotly_white",
+            yaxis_title="Total Cost ($)",
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_cost, use_container_width=True)
 
-    # --- 6. Collapsible Raw Data Logs ---
+    with chart_col2:
+        st.markdown("#### Physical Inventory Trajectory")
+        fig_comp = go.Figure()
+        
+        # Plot Baseline
+        fig_comp.add_trace(go.Scatter(
+            x=list(range(sim_days_pr)), y=res_baseline['history'], mode='lines', 
+            name='Baseline', line=dict(color='#1f77b4', width=3)
+        ))
+        
+        # Plot Scenarios
+        colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        for idx, s in enumerate(scenarios_data):
+            fig_comp.add_trace(go.Scatter(
+                x=list(range(sim_days_pr)), y=scenario_results[idx]['history'], mode='lines', 
+                name=s['name'], line=dict(color=colors[idx], width=1.5, dash='dot')
+            ))
+        
+        fig_comp.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
+        fig_comp.update_layout(
+            template="plotly_white", xaxis_title="Simulation Day", yaxis_title="Units On Hand",
+            height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+
+    # --- 5. Collapsible Raw Data Logs ---
     with st.expander("📋 View Daily Simulation Log Tables"):
         st.markdown("Raw 365-day tracking for Physical Inventory levels side-by-side.")
         
-        log_df = pd.DataFrame({
+        log_data = {
             "Day": range(1, sim_days_pr + 1),
             "Daily Demand": daily_demand_pr.astype(int),
-            "Recommended Policy Inv": res_recommended['history'].astype(int),
-            "User Policy Inv": res_user['history'].astype(int)
-        })
+            "Baseline Inv": res_baseline['history'].astype(int)
+        }
+        
+        for idx, s in enumerate(scenarios_data):
+            log_data[f"{s['name']} Inv"] = scenario_results[idx]['history'].astype(int)
+            
+        log_df = pd.DataFrame(log_data)
         
         def highlight_stockouts(val):
             color = '#ffcccc' if isinstance(val, (int, float)) and val < 0 else ''
             return f'background-color: {color}'
             
-        st.dataframe(log_df.style.map(highlight_stockouts, subset=['Recommended Policy Inv', 'User Policy Inv']), use_container_width=True, hide_index=True)
+        st.dataframe(
+            log_df.style.map(highlight_stockouts, subset=[c for c in log_df.columns if 'Inv' in c]), 
+            use_container_width=True, hide_index=True
+        )
