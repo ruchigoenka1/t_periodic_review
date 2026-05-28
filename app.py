@@ -671,4 +671,4 @@ with tab3:
             color = '#ffcccc' if isinstance(val, (int, float)) and val < 0 else ''
             return f'background-color: {color}'
             
-        st.dataframe(log_df.style.applymap(highlight_stockouts, subset=['Recommended Policy Inv', 'User Policy Inv']), use_container_width=True, hide_index=True)
+        st.dataframe(log_df.style.map(highlight_stockouts, subset=['Recommended Policy Inv', 'User Policy Inv']), use_container_width=True, hide_index=True)
