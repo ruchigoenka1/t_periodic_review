@@ -760,7 +760,7 @@ with tab3:
 
 
 
-with tab4:
+with tab5:
     st.header("🔙 Historical Policy Backtesting")
     st.markdown("""
     Upload your actual historical demand data to simulate how different inventory policies would have performed. 
@@ -792,7 +792,6 @@ with tab4:
                 df_bt = pd.read_excel(uploaded_file)
                 
             # --- Dynamic Column Mapping ---
-            # Auto-map known columns from uploaded files
             if 'Store Sale' in df_bt.columns:
                 df_bt.rename(columns={'Store Sale': 'Demand'}, inplace=True)
             elif 'Bhiwandi Sales' in df_bt.columns:
@@ -800,7 +799,6 @@ with tab4:
             elif 'Sales' in df_bt.columns:
                 df_bt.rename(columns={'Sales': 'Demand'}, inplace=True)
                 
-            # Fallback if no known demand column is found
             if 'Demand' not in df_bt.columns:
                 st.warning("⚠️ Could not automatically detect a 'Demand' column.")
                 selected_col = st.selectbox("Please select the column that represents your daily demand:", df_bt.columns)
@@ -908,13 +906,11 @@ with tab4:
                 
                 # Apply specific policy rules
                 if "Continuous" in policy_type:
-                    # Check position daily
                     inv_pos = current_inv + np.sum(receipts[day+1:day+bt_lead_time+1])
                     if inv_pos <= rop:
                         receipts[day + bt_lead_time] += order_q
                         orders_placed += 1
                 else:
-                    # Check position only on review days
                     if day % review_t == 0:
                         inv_pos = current_inv + np.sum(receipts[day+1:day+bt_lead_time+1])
                         if inv_pos < target_lvl:
@@ -932,7 +928,7 @@ with tab4:
             total_ord_cost = orders_placed * bt_order_cost
             total_sys_cost = total_hold_cost + total_ord_cost
 
-            # --- 4. Results & Closing Stock Curve ---
+            # --- 4. Results & Combined Closing Stock Curve ---
             st.divider()
             st.subheader("3. Backtest Results & Financial Impact")
             
@@ -944,31 +940,42 @@ with tab4:
             res_c3.metric("Holding Cost (Capital Blocked)", f_usd(total_hold_cost))
             res_c4.metric("Ordering Cost (Logistics)", f_usd(total_ord_cost), delta=f"{orders_placed} Total Orders", delta_color="off")
 
-            # 4. Closing Stock Inventory Curve
-            st.markdown("#### 📉 Closing Stock Inventory Curve")
-            st.caption("Visualizes the actual daily ending inventory balances over the historical timeline.")
+            # 4. Closing Stock & Demand Overlay Graph
+            st.markdown("#### 📉 Demand vs. Inventory Trajectory Overlay")
+            st.caption("Visualizes your actual daily demand (bars) against the resulting inventory levels (line) over time.")
             
             fig_close = go.Figure()
             
-            # Check for generic 'Day' column or 'Date' column to plot against
+            # Determine X-Axis
             x_axis = df_bt.index
             if 'Date' in df_bt.columns:
                 x_axis = df_bt['Date']
             elif 'Day' in df_bt.columns:
                 x_axis = df_bt['Day']
                 
+            # 1. Overlay Demand Trace (Bars)
+            fig_close.add_trace(go.Bar(
+                x=x_axis,
+                y=df_bt['Demand'],
+                name='Actual Demand (Units)',
+                marker_color='rgba(156, 163, 175, 0.5)' # Neutral gray so it doesn't overpower the line
+            ))
+
+            # 2. Add Closing Stock Trace (Line)
             fig_close.add_trace(go.Scatter(
                 x=x_axis, 
                 y=inv_history, 
                 mode='lines', 
-                name='Closing Stock',
+                name='Simulated Closing Stock',
                 line=dict(color='#2ca02c', width=2),
                 fill='tozeroy',
-                fillcolor='rgba(44, 160, 44, 0.1)'
+                fillcolor='rgba(44, 160, 44, 0.15)'
             ))
+            
+            # Base Zero Line
             fig_close.add_hline(y=0, line_dash="solid", line_color="#d62728", line_width=1.5)
             
-            # Optional: Add ROP/Target line depending on policy
+            # ROP / Target line depending on policy
             if "Continuous" in policy_type:
                 fig_close.add_hline(y=rop, line_dash="dash", line_color="#1f77b4", annotation_text="Reorder Point (ROP)", annotation_position="top left")
             else:
@@ -977,9 +984,10 @@ with tab4:
             fig_close.update_layout(
                 template="plotly_white", 
                 xaxis_title="Historical Period", 
-                yaxis_title="Physical Units On Hand",
-                height=400,
-                margin=dict(t=20, b=20)
+                yaxis_title="Quantity (Units)",
+                height=450,
+                margin=dict(t=20, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_close, use_container_width=True)
 
