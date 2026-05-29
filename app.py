@@ -20,7 +20,7 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review", "Inventory Audit"])
+tab1, tab2, tab3, tab4 = st.tabs(["Average Demand", "📊 Demand Analyzer and Histogram", "🔄 Periodic Review", "Inventory Audit"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
@@ -225,7 +225,7 @@ with tab1:
 # TAB 2: DEMAND HISTOGRAM ANALYZER
 # ==========================================
 with tab2:
-    st.header("Demand Histogram Analyzer")
+    st.header("Demand Analyzer")
     
     st.subheader("1. Data Configuration")
     data_source = st.radio("Select Data Source:", ("Generate Synthetic Data", "Upload Your Own Data"), horizontal=True, key="ds_p1")
@@ -270,21 +270,17 @@ with tab2:
                     else:
                         df_upload = pd.read_excel(uploaded_file)
                     
-                    # Extract available columns
                     available_columns = df_upload.columns.tolist()
                     
                     if 'Demand' not in available_columns:
                         st.warning("⚠️ Column named 'Demand' not found. Please select the appropriate column below:")
                     
-                    # Determine default index
                     default_idx = available_columns.index('Demand') if 'Demand' in available_columns else 0
                     
-                    # Allow user to select the demand column
                     selected_column = st.selectbox("Select the Demand Data Column:", options=available_columns, index=default_idx)
                     
                     if selected_column:
                         df = df_upload[[selected_column]].dropna().copy()
-                        # Rename internally so the rest of the code logic works flawlessly
                         df.rename(columns={selected_column: 'Demand'}, inplace=True)
                         df['Demand'] = pd.to_numeric(df['Demand'], errors='coerce')
                         df = df.dropna()
@@ -332,7 +328,53 @@ with tab2:
 
     if df is not None:
         st.divider()
-        st.subheader("2. Probability & Coverage Analysis")
+        st.subheader("2. Volatility & Statistical Analysis")
+        
+        cov_col1, cov_col2 = st.columns([1, 2])
+        
+        with cov_col1:
+            st.markdown("#### Formula")
+            st.latex(r"CoV = \frac{\sigma}{\mu}")
+            st.caption(r"Where $\sigma$ = Standard Deviation and $\mu$ = Mean")
+            
+            st.markdown("#### 📋 Statistical Summary")
+            summary_stats = df['Demand'].describe().to_frame().T
+            st.dataframe(summary_stats[['mean', 'std', 'min', '25%', '50%', '75%', 'max']], use_container_width=True)
+            
+        with cov_col2:
+            mean_val = float(df['Demand'].mean())
+            std_val = float(df['Demand'].std())
+            cov_val = (std_val / mean_val) if mean_val > 0 else 0.0
+            
+            if cov_val <= 0.10:
+                status_text = "🟢 Ultra-Stable / Constant"
+                explanation = "Highly repetitive and predictable demand. Use automated just-in-time (JIT) scheduling or lean kanbans. Minimize safety stock to release working capital."
+            elif cov_val <= 0.25:
+                status_text = "🟢 Stable / Predictable"
+                explanation = "Normal variation patterns present. Standard statistical forecasting and fixed reorder points will yield high accuracy with minimal safety stock buffers."
+            elif cov_val <= 0.50:
+                status_text = "🟡 Moderate Volatility"
+                explanation = "Demand exhibits noticeable fluctuations. Requires proactive demand sensing and traditional statistical safety stocks to counter stockout risks."
+            elif cov_val <= 1.00:
+                status_text = "🟠 High Volatility"
+                explanation = "Highly variable demand spikes. Avoid automated ordering systems without collaborative forecasting inputs. Expect to maintain higher, dynamic safety stock thresholds."
+            else:
+                status_text = "🔴 Erratic / Lumpy / Sporadic"
+                explanation = "Highly unpredictable or intermittent demand. Traditional safety stock formulas do not work well here. Consider move-to-order (MTO) execution or project-based buffers."
+                
+            m_col1, m_col2, m_col3 = st.columns(3)
+            with m_col1:
+                st.metric("Mean ($\mu$)", f"{mean_val:.2f}")
+            with m_col2:
+                st.metric("Std Dev ($\sigma$)", f"{std_val:.2f}")
+            with m_col3:
+                st.metric("Calculated CoV", f"{cov_val:.3f}")
+                
+            st.markdown(f"### Profile: {status_text}")
+            st.info(explanation)
+
+        st.divider()
+        st.subheader("3. Probability & Coverage Analysis")
         
         analysis_col1, analysis_col2 = st.columns(2)
         
@@ -352,7 +394,7 @@ with tab2:
             st.caption(f"To cover {target_perc}% of all periods, you need to satisfy a demand of {int(demand_at_perc)}.")
 
         st.divider()
-        st.subheader("3. Visual Distribution")
+        st.subheader("4. Visual Distribution")
         
         num_bins = st.slider("Select Number of Bins:", 5, 50, 15)
         
@@ -390,69 +432,20 @@ with tab2:
         fig.update_layout(bargap=0.1, xaxis_title="Demand Quantity", yaxis_title="Count of Periods")
         st.plotly_chart(fig, use_container_width=True)
         
-        st.divider()
+        st.markdown("#### Bin Frequency Table")
+        pct_total = counts / len(df) * 100
         
-        table_col1, table_col2 = st.columns([1, 1])
-
-        with table_col1:
-            st.markdown("#### 📋 Statistical Summary")
-            summary_stats = df['Demand'].describe().to_frame().T
-            st.dataframe(summary_stats[['mean', 'std', 'min', '25%', '50%', '75%', 'max']], use_container_width=True)
-
-        with table_col2:
-            st.markdown("#### Bin Frequency Table")
-            pct_total = counts / len(df) * 100
-            
-            bin_df = pd.DataFrame({
-                "Bin Range": [f"{int(bin_edges[i])} - {int(bin_edges[i+1])}" for i in range(len(bin_edges)-1)],
-                "Frequency (Count)": counts,
-                "% of Total": pct_total.round(1),
-                "Cum. Count": counts.cumsum(),
-                "Cum. %": pct_total.cumsum().round(1)
-            })
-            st.dataframe(bin_df, use_container_width=True, hide_index=True)
-
-        st.divider()
-        st.subheader("📊 Demand Volatility Analysis (CoV)")
+        bin_df = pd.DataFrame({
+            "Bin Range": [f"{int(bin_edges[i])} - {int(bin_edges[i+1])}" for i in range(len(bin_edges)-1)],
+            "Frequency (Count)": counts,
+            "% of Total": pct_total.round(1),
+            "Cum. Count": counts.cumsum(),
+            "Cum. %": pct_total.cumsum().round(1)
+        })
+        st.dataframe(bin_df, use_container_width=True, hide_index=True)
         
-        cov_col1, cov_col2 = st.columns([1, 2])
-        
-        with cov_col1:
-            st.markdown("#### Formula")
-            st.latex(r"CoV = \frac{\sigma}{\mu}")
-            st.caption(r"Where $\sigma$ = Standard Deviation and $\mu$ = Mean")
-            
-        with cov_col2:
-            mean_val = float(df['Demand'].mean())
-            std_val = float(df['Demand'].std())
-            cov_val = (std_val / mean_val) if mean_val > 0 else 0.0
-            
-            if cov_val <= 0.10:
-                status_text = "🟢 Ultra-Stable / Constant"
-                explanation = "Highly repetitive and predictable demand. Use automated just-in-time (JIT) scheduling or lean kanbans. Minimize safety stock to release working capital."
-            elif cov_val <= 0.25:
-                status_text = "🟢 Stable / Predictable"
-                explanation = "Normal variation patterns present. Standard statistical forecasting and fixed reorder points will yield high accuracy with minimal safety stock buffers."
-            elif cov_val <= 0.50:
-                status_text = "🟡 Moderate Volatility"
-                explanation = "Demand exhibits noticeable fluctuations. Requires proactive demand sensing and traditional statistical safety stocks to counter stockout risks."
-            elif cov_val <= 1.00:
-                status_text = "🟠 High Volatility"
-                explanation = "Highly variable demand spikes. Avoid automated ordering systems without collaborative forecasting inputs. Expect to maintain higher, dynamic safety stock thresholds."
-            else:
-                status_text = "🔴 Erratic / Lumpy / Sporadic"
-                explanation = "Highly unpredictable or intermittent demand. Traditional safety stock formulas do not work well here. Consider move-to-order (MTO) execution or project-based buffers."
-                
-            m_col1, m_col2, m_col3 = st.columns(3)
-            with m_col1:
-                st.metric("Mean ($\mu$)", f"{mean_val:.2f}")
-            with m_col2:
-                st.metric("Std Dev ($\sigma$)", f"{std_val:.2f}")
-            with m_col3:
-                st.metric("Calculated CoV", f"{cov_val:.3f}")
-                
-            st.markdown(f"### Profile: {status_text}")
-            st.info(explanation)
+
+
 # ==========================================
 # TAB 3: PERIODIC REVIEW (VECTORIZED LOGIC)
 # ==========================================
