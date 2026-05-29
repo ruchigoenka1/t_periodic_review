@@ -850,7 +850,6 @@ with tab4:
                 
             with chart_c2:
                 st.markdown("**📊 Demand Distribution (Histogram)**")
-                # Changed color from orange to light blue ('#85c1e9')
                 fig_hist = px.histogram(df_bt, x='Demand', nbins=20, template="plotly_white", color_discrete_sequence=['#85c1e9'])
                 fig_hist.update_layout(height=300, xaxis_title="Demand Quantity", yaxis_title="Frequency", margin=dict(t=10, b=10))
                 st.plotly_chart(fig_hist, use_container_width=True)
@@ -886,8 +885,8 @@ with tab4:
             st.divider()
             st.subheader("2. Financial Costs & Policy Configuration")
             
-            # User Input: Holding Cost (%), Ordering Cost
-            cost_c1, cost_c2, cost_c3, cost_c4 = st.columns(4)
+            # User Input: Costs and Service Level
+            cost_c1, cost_c2, cost_c3, cost_c4, cost_c5 = st.columns(5)
             with cost_c1:
                 bt_unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0, key="bt_uc")
             with cost_c2:
@@ -896,8 +895,11 @@ with tab4:
                 bt_hold_pct = st.number_input("Annual Holding Cost (%)", value=20.0, step=1.0, key="bt_hp")
             with cost_c4:
                 bt_lead_time = st.number_input("Lead Time (Days)", value=7, min_value=1, step=1, key="bt_lt")
+            with cost_c5:
+                bt_service_lvl = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1, key="bt_sl")
                 
             bt_hold_daily = (bt_unit_cost * (bt_hold_pct / 100.0)) / 365.0
+            bt_z_score = norm.ppf(bt_service_lvl / 100.0)
 
             # Policy Selection Toggle
             st.write("<br>", unsafe_allow_html=True)
@@ -912,7 +914,8 @@ with tab4:
             # Dynamic UI based on policy selection
             if "Continuous" in policy_type:
                 with pol_c1:
-                    rop = st.number_input("Reorder Point (ROP)", value=int(mean_dem * bt_lead_time + std_dem * 1.64 * np.sqrt(bt_lead_time)), step=10, help="Order is triggered when inventory drops below this.")
+                    calc_rop = (mean_dem * bt_lead_time) + (bt_z_score * std_dem * np.sqrt(bt_lead_time))
+                    rop = st.number_input("Reorder Point (ROP)", value=int(calc_rop), step=10, help="Order is triggered when inventory drops below this.")
                 with pol_c2:
                     eoq_est = np.sqrt((2 * (mean_dem*365) * bt_order_cost) / (bt_unit_cost * (bt_hold_pct/100))) if bt_hold_pct > 0 else 100
                     order_q = st.number_input("Order Quantity (Q)", value=int(eoq_est) if eoq_est > 0 else 100, step=10, help="Fixed amount ordered each time.")
@@ -923,7 +926,7 @@ with tab4:
                     review_t = st.number_input("Review Period (Days)", value=14, min_value=1, step=1)
                 with pol_c2:
                     pi = review_t + bt_lead_time
-                    calc_targ = (mean_dem * pi) + (1.64 * std_dem * np.sqrt(pi))
+                    calc_targ = (mean_dem * pi) + (bt_z_score * std_dem * np.sqrt(pi))
                     target_lvl = st.number_input("Target Level (Order-Up-To)", value=int(calc_targ), step=10)
                 with pol_c3:
                     start_inv = st.number_input("Starting Inventory", value=int(target_lvl), step=10)
@@ -934,6 +937,7 @@ with tab4:
             
             inv_history = np.zeros(sim_len)
             receipts = np.zeros(sim_len + bt_lead_time + 1)
+            fulfilled_arr = np.zeros(sim_len)
             
             current_inv = float(start_inv)
             orders_placed = 0
@@ -946,6 +950,7 @@ with tab4:
                 fulfilled = min(max(current_inv, 0), demand_arr[day])
                 current_inv -= fulfilled
                 units_fulfilled += fulfilled
+                fulfilled_arr[day] = fulfilled
                 
                 inv_history[day] = current_inv
                 
@@ -1027,6 +1032,14 @@ with tab4:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_close, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"❌ An error occurred while processing the file: {e}")
+            
+            # --- 5. Data Table of the Simulated Policy ---
+            with st.expander("📋 View Simulated Daily Log Table"):
+                st.markdown("Raw day-by-day tracking for Demand, Fulfillment, and Simulated Inventory.")
+                
+                sim_log_df = pd.DataFrame({
+                    "Period": x_axis_hist,
+                    "Demand": demand_arr.astype(int),
+                    "Units Fulfilled": fulfilled_arr.astype(int),
+                    "Inventory Receipts": receipts[:sim_len].astype(int),
+                    "Simulated Closing Stock": inv_history.astype(int)
