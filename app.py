@@ -952,6 +952,7 @@ with tab4:
             sim_max_inv = np.max(inv_history)
             sim_min_inv = np.min(inv_history)
             sim_avg_inv = np.mean(inv_history)
+            sim_days_at_zero = np.sum(inv_history <= 0)
             
             sim_max_wc = max(sim_max_inv, 0) * bt_unit_cost
             sim_avg_wc = max(sim_avg_inv, 0) * bt_unit_cost
@@ -961,12 +962,13 @@ with tab4:
             total_sys_cost = total_hold_cost + total_ord_cost
 
             # Historical KPIs Extraction (If Closing Balance Exists)
-            hist_max_inv = hist_min_inv = hist_avg_inv = hist_orders = hist_hold_cost = hist_ord_cost = hist_total_cost = hist_avg_wc = hist_max_wc = 0
+            hist_max_inv = hist_min_inv = hist_avg_inv = hist_orders = hist_hold_cost = hist_ord_cost = hist_total_cost = hist_avg_wc = hist_max_wc = hist_days_at_zero = 0
             if hist_has_inv:
                 hist_inv_arr = df_bt['Closing Balance'].values
                 hist_max_inv = np.max(hist_inv_arr)
                 hist_min_inv = np.min(hist_inv_arr)
                 hist_avg_inv = np.mean(hist_inv_arr)
+                hist_days_at_zero = np.sum(hist_inv_arr <= 0)
                 
                 hist_max_wc = max(hist_max_inv, 0) * bt_unit_cost
                 hist_avg_wc = max(hist_avg_inv, 0) * bt_unit_cost
@@ -977,9 +979,8 @@ with tab4:
                 if order_cols:
                     hist_orders = (pd.to_numeric(df_bt[order_cols[0]], errors='coerce').fillna(0) > 0).sum()
                 else:
-                    # Mathematical inference of historical orders if no explicit column exists
                     inferred_receipts = np.diff(hist_inv_arr, prepend=start_inv) + demand_arr
-                    hist_orders = (inferred_receipts > 5).sum() # Threshold to avoid minor reconciliation noise
+                    hist_orders = (inferred_receipts > 5).sum() 
                     
                 hist_ord_cost = hist_orders * bt_order_cost
                 hist_total_cost = hist_hold_cost + hist_ord_cost
@@ -990,28 +991,41 @@ with tab4:
             
             def f_usd(v): return f"${v:,.2f}"
             def f_unit(v): return f"{int(v)} Units"
+            def f_day(v): return f"{int(v)} Days"
+            
+            def diff_unit(sim, hist):
+                d = sim - hist
+                return f"+{int(d)} Units" if d > 0 else f"{int(d)} Units"
+            def diff_usd(sim, hist):
+                d = sim - hist
+                return f"+${d:,.2f}" if d > 0 else f"-${abs(d):,.2f}"
+            def diff_pct(sim, hist):
+                d = sim - hist
+                return f"+{d:.2f}%" if d > 0 else f"{d:.2f}%"
+            def diff_day(sim, hist):
+                d = sim - hist
+                return f"+{int(d)} Days" if d > 0 else f"{int(d)} Days"
             
             # Render Comparative Tables if historical inventory data exists
             if hist_has_inv:
-                mat_c1, mat_c2 = st.columns(2)
-                
-                with mat_c1:
-                    st.markdown("#### A. Operational & Inventory Health")
-                    ops_df = pd.DataFrame({
-                        "Metric": ["Max Inventory", "Average Inventory", "Minimum Inventory (Depth)", "Missed Sales (Lost)", "Fill Rate (%)"],
-                        "Historical Actuals": [f_unit(hist_max_inv), f_unit(hist_avg_inv), f_unit(hist_min_inv), "N/A (Derived)", "N/A"],
-                        "Simulated Policy": [f_unit(sim_max_inv), f_unit(sim_avg_inv), f_unit(sim_min_inv), f_unit(sim_lost_sales), f"{sim_fill_rate:.2f}%"]
-                    })
-                    st.dataframe(ops_df, use_container_width=True, hide_index=True)
+                st.markdown("#### A. Operational & Inventory Health")
+                ops_df = pd.DataFrame({
+                    "Metric": ["Max Inventory", "Average Inventory", "Minimum Inventory (Depth)", "Days at Zero Inventory", "Missed Sales (Lost)", "Fill Rate (%)"],
+                    "Historical Actuals": [f_unit(hist_max_inv), f_unit(hist_avg_inv), f_unit(hist_min_inv), f_day(hist_days_at_zero), "0 Units (Assumed)", "100.00% (Assumed)"],
+                    "Simulated Policy": [f_unit(sim_max_inv), f_unit(sim_avg_inv), f_unit(sim_min_inv), f_day(sim_days_at_zero), f_unit(sim_lost_sales), f"{sim_fill_rate:.2f}%"],
+                    "Delta (Sim - Hist)": [diff_unit(sim_max_inv, hist_max_inv), diff_unit(sim_avg_inv, hist_avg_inv), diff_unit(sim_min_inv, hist_min_inv), diff_day(sim_days_at_zero, hist_days_at_zero), diff_unit(sim_lost_sales, 0), diff_pct(sim_fill_rate, 100.0)]
+                })
+                st.dataframe(ops_df, use_container_width=True, hide_index=True)
                     
-                with mat_c2:
-                    st.markdown("#### B. Capital & Financial Impact")
-                    fin_df = pd.DataFrame({
-                        "Metric": ["Average Working Capital", "Max Working Capital", "Total Ordering Cost", "Total Holding Cost", "Total System Cost"],
-                        "Historical Actuals": [f_usd(hist_avg_wc), f_usd(hist_max_wc), f_usd(hist_ord_cost), f_usd(hist_hold_cost), f_usd(hist_total_cost)],
-                        "Simulated Policy": [f_usd(sim_avg_wc), f_usd(sim_max_wc), f_usd(total_ord_cost), f_usd(total_hold_cost), f_usd(total_sys_cost)]
-                    })
-                    st.dataframe(fin_df, use_container_width=True, hide_index=True)
+                st.write("<br>", unsafe_allow_html=True)
+                st.markdown("#### B. Capital & Financial Impact")
+                fin_df = pd.DataFrame({
+                    "Metric": ["Average Working Capital", "Max Working Capital", "Total Ordering Cost", "Total Holding Cost", "Total System Cost"],
+                    "Historical Actuals": [f_usd(hist_avg_wc), f_usd(hist_max_wc), f_usd(hist_ord_cost), f_usd(hist_hold_cost), f_usd(hist_total_cost)],
+                    "Simulated Policy": [f_usd(sim_avg_wc), f_usd(sim_max_wc), f_usd(total_ord_cost), f_usd(total_hold_cost), f_usd(total_sys_cost)],
+                    "Delta (Sim - Hist)": [diff_usd(sim_avg_wc, hist_avg_wc), diff_usd(sim_max_wc, hist_max_wc), diff_usd(total_ord_cost, hist_ord_cost), diff_usd(total_hold_cost, hist_hold_cost), diff_usd(total_sys_cost, hist_total_cost)]
+                })
+                st.dataframe(fin_df, use_container_width=True, hide_index=True)
             else:
                 # Fallback if no historical closing balance was provided
                 res_c1, res_c2, res_c3, res_c4 = st.columns(4)
