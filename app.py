@@ -776,8 +776,12 @@ with tab4:
     
     with col_up2:
         st.markdown("#### 📋 Template")
-        st.caption("Ensure your file has a header named **Demand**, **Store Sale**, or select it manually upon upload.")
-        template_df = pd.DataFrame({'Date': pd.date_range(start='1/1/2026', periods=5), 'Demand': [120, 95, 110, 135, 80]})
+        st.caption("Ensure your file has a header named **Demand**, **Store Sale**, or select it manually upon upload. Optionally include **Closing Balance**.")
+        template_df = pd.DataFrame({
+            'Day': [1, 2, 3, 4, 5], 
+            'Demand': [120, 95, 110, 135, 80],
+            'Closing Balance': [100, 75, 50, 25, 0]
+        })
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             template_df.to_excel(writer, index=False, sheet_name='Template')
@@ -790,6 +794,9 @@ with tab4:
                 df_bt = pd.read_csv(uploaded_file)
             else:
                 df_bt = pd.read_excel(uploaded_file)
+                
+            # --- Column Cleanup (Handles "\n" in headers like "Closing\nBalance") ---
+            df_bt.columns = [str(c).replace('\n', ' ').strip() for c in df_bt.columns]
                 
             # --- Dynamic Column Mapping ---
             if 'Store Sale' in df_bt.columns:
@@ -821,27 +828,65 @@ with tab4:
             m3.metric("Std Dev ($\sigma$)", f"{std_dem:.1f}")
             m4.metric("CoV", f"{cov_dem:.3f}", delta="High Volatility" if cov_dem > 0.5 else "Stable", delta_color="inverse" if cov_dem > 0.5 else "normal")
             
-            # 1 & 2. Demand Line Graph and Histogram
+            # --- Graphical Section 1: Demand Profiles ---
             st.write("<br>", unsafe_allow_html=True)
             chart_c1, chart_c2 = st.columns(2)
             
+            # Determine generic X-Axis for all historical plots
+            x_axis_hist = df_bt.index
+            if 'Date' in df_bt.columns:
+                x_axis_hist = df_bt['Date']
+            elif 'Day' in df_bt.columns:
+                x_axis_hist = df_bt['Day']
+            
             with chart_c1:
                 st.markdown("**📉 Historical Demand Curve**")
-                fig_line = px.line(df_bt, y='Demand', template="plotly_white", color_discrete_sequence=['#1f77b4'])
-                fig_line.update_layout(height=300, xaxis_title="Period", yaxis_title="Units", margin=dict(t=10, b=10))
+                fig_line = go.Figure()
+                fig_line.add_trace(go.Scatter(
+                    x=x_axis_hist, y=df_bt['Demand'], mode='lines', name='Demand', line=dict(color='#1f77b4', width=2)
+                ))
+                fig_line.update_layout(template="plotly_white", height=300, xaxis_title="Period", yaxis_title="Units", margin=dict(t=10, b=10))
                 st.plotly_chart(fig_line, use_container_width=True)
                 
             with chart_c2:
                 st.markdown("**📊 Demand Distribution (Histogram)**")
-                fig_hist = px.histogram(df_bt, x='Demand', nbins=20, template="plotly_white", color_discrete_sequence=['#ff7f0e'])
+                # Changed color from orange to light blue ('#85c1e9')
+                fig_hist = px.histogram(df_bt, x='Demand', nbins=20, template="plotly_white", color_discrete_sequence=['#85c1e9'])
                 fig_hist.update_layout(height=300, xaxis_title="Demand Quantity", yaxis_title="Frequency", margin=dict(t=10, b=10))
                 st.plotly_chart(fig_hist, use_container_width=True)
+
+            # --- Graphical Section 2: Historical Closing Balance ---
+            if 'Closing Balance' in df_bt.columns:
+                df_bt['Closing Balance'] = pd.to_numeric(df_bt['Closing Balance'], errors='coerce').fillna(0)
+                st.write("<br>", unsafe_allow_html=True)
+                st.markdown("#### 📉 Actual Historical Closing Stock (From Uploaded Data)")
+                st.caption("Visualizes the raw inventory levels recorded historically before any simulated policy changes.")
+                
+                fig_hist_close = go.Figure()
+                fig_hist_close.add_trace(go.Scatter(
+                    x=x_axis_hist, 
+                    y=df_bt['Closing Balance'], 
+                    mode='lines', 
+                    name='Historical Closing Balance',
+                    line=dict(color='#9467bd', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(148, 103, 189, 0.15)'
+                ))
+                fig_hist_close.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
+                fig_hist_close.update_layout(
+                    template="plotly_white", 
+                    xaxis_title="Historical Period", 
+                    yaxis_title="Units On Hand",
+                    height=300,
+                    margin=dict(t=10, b=10)
+                )
+                st.plotly_chart(fig_hist_close, use_container_width=True)
 
             # --- 2. Cost & Policy Configuration ---
             st.divider()
             st.subheader("2. Financial Costs & Policy Configuration")
             
-            # 5. User Input: Holding Cost (%), Ordering Cost
+            # User Input: Holding Cost (%), Ordering Cost
             cost_c1, cost_c2, cost_c3, cost_c4 = st.columns(4)
             with cost_c1:
                 bt_unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0, key="bt_uc")
@@ -854,7 +899,7 @@ with tab4:
                 
             bt_hold_daily = (bt_unit_cost * (bt_hold_pct / 100.0)) / 365.0
 
-            # 7. Policy Selection Toggle
+            # Policy Selection Toggle
             st.write("<br>", unsafe_allow_html=True)
             policy_type = st.radio(
                 "Select Inventory Control Policy to Backtest:", 
@@ -941,29 +986,22 @@ with tab4:
             res_c4.metric("Ordering Cost (Logistics)", f_usd(total_ord_cost), delta=f"{orders_placed} Total Orders", delta_color="off")
 
             # 4. Closing Stock & Demand Overlay Graph
-            st.markdown("#### 📉 Demand vs. Inventory Trajectory Overlay")
-            st.caption("Visualizes your actual daily demand (bars) against the resulting inventory levels (line) over time.")
+            st.markdown("#### 📉 Simulated Demand vs. Inventory Trajectory Overlay")
+            st.caption("Visualizes your actual daily demand (bars) against the NEW resulting inventory levels (line) based on the policy above.")
             
             fig_close = go.Figure()
             
-            # Determine X-Axis
-            x_axis = df_bt.index
-            if 'Date' in df_bt.columns:
-                x_axis = df_bt['Date']
-            elif 'Day' in df_bt.columns:
-                x_axis = df_bt['Day']
-                
             # 1. Overlay Demand Trace (Bars)
             fig_close.add_trace(go.Bar(
-                x=x_axis,
+                x=x_axis_hist,
                 y=df_bt['Demand'],
                 name='Actual Demand (Units)',
-                marker_color='rgba(156, 163, 175, 0.5)' # Neutral gray so it doesn't overpower the line
+                marker_color='rgba(156, 163, 175, 0.5)' # Neutral gray
             ))
 
             # 2. Add Closing Stock Trace (Line)
             fig_close.add_trace(go.Scatter(
-                x=x_axis, 
+                x=x_axis_hist, 
                 y=inv_history, 
                 mode='lines', 
                 name='Simulated Closing Stock',
@@ -972,7 +1010,6 @@ with tab4:
                 fillcolor='rgba(44, 160, 44, 0.15)'
             ))
             
-            # Base Zero Line
             fig_close.add_hline(y=0, line_dash="solid", line_color="#d62728", line_width=1.5)
             
             # ROP / Target line depending on policy
