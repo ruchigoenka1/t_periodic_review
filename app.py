@@ -776,11 +776,12 @@ with tab4:
     
     with col_up2:
         st.markdown("#### 📋 Template")
-        st.caption("Ensure your file has a header named **Demand**, **Store Sale**, or select it manually upon upload. Optionally include **Closing Balance**.")
+        st.caption("Ensure your file has a header named **Demand**, **Store Sale**, or select it manually upon upload. Include **Closing Balance** to enable historical comparison matrices.")
         template_df = pd.DataFrame({
             'Day': [1, 2, 3, 4, 5], 
             'Demand': [120, 95, 110, 135, 80],
-            'Closing Balance': [100, 75, 50, 25, 0]
+            'Closing Balance': [100, 75, 50, 25, 0],
+            'Receipts': [0, 0, 0, 0, 150]
         })
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -788,14 +789,13 @@ with tab4:
         st.download_button(label="📥 Download Template", data=buffer.getvalue(), file_name="backtest_template.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
     if uploaded_file is not None:
-        # Read Data
         try:
             if uploaded_file.name.endswith('.csv'):
                 df_bt = pd.read_csv(uploaded_file)
             else:
                 df_bt = pd.read_excel(uploaded_file)
                 
-            # --- Column Cleanup (Handles "\n" in headers like "Closing\nBalance") ---
+            # --- Column Cleanup (Handles "\n" in headers) ---
             df_bt.columns = [str(c).replace('\n', ' ').strip() for c in df_bt.columns]
                 
             # --- Dynamic Column Mapping ---
@@ -832,7 +832,6 @@ with tab4:
             st.write("<br>", unsafe_allow_html=True)
             chart_c1, chart_c2 = st.columns(2)
             
-            # Determine generic X-Axis for all historical plots
             x_axis_hist = df_bt.index
             if 'Date' in df_bt.columns:
                 x_axis_hist = df_bt['Date']
@@ -842,9 +841,7 @@ with tab4:
             with chart_c1:
                 st.markdown("**📉 Historical Demand Curve**")
                 fig_line = go.Figure()
-                fig_line.add_trace(go.Scatter(
-                    x=x_axis_hist, y=df_bt['Demand'], mode='lines', name='Demand', line=dict(color='#1f77b4', width=2)
-                ))
+                fig_line.add_trace(go.Scatter(x=x_axis_hist, y=df_bt['Demand'], mode='lines', name='Demand', line=dict(color='#1f77b4', width=2)))
                 fig_line.update_layout(template="plotly_white", height=300, xaxis_title="Period", yaxis_title="Units", margin=dict(t=10, b=10))
                 st.plotly_chart(fig_line, use_container_width=True)
                 
@@ -855,37 +852,25 @@ with tab4:
                 st.plotly_chart(fig_hist, use_container_width=True)
 
             # --- Graphical Section 2: Historical Closing Balance ---
-            if 'Closing Balance' in df_bt.columns:
+            hist_has_inv = 'Closing Balance' in df_bt.columns
+            if hist_has_inv:
                 df_bt['Closing Balance'] = pd.to_numeric(df_bt['Closing Balance'], errors='coerce').fillna(0)
                 st.write("<br>", unsafe_allow_html=True)
                 st.markdown("#### 📉 Actual Historical Closing Stock (From Uploaded Data)")
-                st.caption("Visualizes the raw inventory levels recorded historically before any simulated policy changes.")
                 
                 fig_hist_close = go.Figure()
                 fig_hist_close.add_trace(go.Scatter(
-                    x=x_axis_hist, 
-                    y=df_bt['Closing Balance'], 
-                    mode='lines', 
-                    name='Historical Closing Balance',
-                    line=dict(color='#9467bd', width=2),
-                    fill='tozeroy',
-                    fillcolor='rgba(148, 103, 189, 0.15)'
+                    x=x_axis_hist, y=df_bt['Closing Balance'], mode='lines', name='Historical Closing Balance',
+                    line=dict(color='#9467bd', width=2), fill='tozeroy', fillcolor='rgba(148, 103, 189, 0.15)'
                 ))
                 fig_hist_close.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
-                fig_hist_close.update_layout(
-                    template="plotly_white", 
-                    xaxis_title="Historical Period", 
-                    yaxis_title="Units On Hand",
-                    height=300,
-                    margin=dict(t=10, b=10)
-                )
+                fig_hist_close.update_layout(template="plotly_white", xaxis_title="Historical Period", yaxis_title="Units On Hand", height=300, margin=dict(t=10, b=10))
                 st.plotly_chart(fig_hist_close, use_container_width=True)
 
             # --- 2. Cost & Policy Configuration ---
             st.divider()
             st.subheader("2. Financial Costs & Policy Configuration")
             
-            # User Input: Costs and Service Level
             cost_c1, cost_c2, cost_c3, cost_c4, cost_c5 = st.columns(5)
             with cost_c1:
                 bt_unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0, key="bt_uc")
@@ -901,26 +886,20 @@ with tab4:
             bt_hold_daily = (bt_unit_cost * (bt_hold_pct / 100.0)) / 365.0
             bt_z_score = norm.ppf(bt_service_lvl / 100.0)
 
-            # Policy Selection Toggle
             st.write("<br>", unsafe_allow_html=True)
-            policy_type = st.radio(
-                "Select Inventory Control Policy to Backtest:", 
-                ["Continuous Review (Reorder Point & Fixed Qty)", "Periodic Review (Fixed Interval & Target Level)"],
-                horizontal=True
-            )
+            policy_type = st.radio("Select Inventory Control Policy to Backtest:", ["Continuous Review (Reorder Point & Fixed Qty)", "Periodic Review (Fixed Interval & Target Level)"], horizontal=True)
             
             pol_c1, pol_c2, pol_c3 = st.columns(3)
             
-            # Dynamic UI based on policy selection
             if "Continuous" in policy_type:
                 with pol_c1:
                     calc_rop = (mean_dem * bt_lead_time) + (bt_z_score * std_dem * np.sqrt(bt_lead_time))
-                    rop = st.number_input("Reorder Point (ROP)", value=int(calc_rop), step=10, help="Order is triggered when inventory drops below this.")
+                    rop = st.number_input("Reorder Point (ROP)", value=int(calc_rop), step=10)
                 with pol_c2:
                     eoq_est = np.sqrt((2 * (mean_dem*365) * bt_order_cost) / (bt_unit_cost * (bt_hold_pct/100))) if bt_hold_pct > 0 else 100
-                    order_q = st.number_input("Order Quantity (Q)", value=int(eoq_est) if eoq_est > 0 else 100, step=10, help="Fixed amount ordered each time.")
+                    order_q = st.number_input("Order Quantity (Q)", value=int(eoq_est) if eoq_est > 0 else 100, step=10)
                 with pol_c3:
-                    start_inv = st.number_input("Starting Inventory", value=int(rop + order_q/2), step=10)
+                    start_inv = st.number_input("Starting Inventory", value=int(df_bt['Closing Balance'].iloc[0]) if hist_has_inv else int(rop + order_q/2), step=10)
             else:
                 with pol_c1:
                     review_t = st.number_input("Review Period (Days)", value=14, min_value=1, step=1)
@@ -929,7 +908,7 @@ with tab4:
                     calc_targ = (mean_dem * pi) + (bt_z_score * std_dem * np.sqrt(pi))
                     target_lvl = st.number_input("Target Level (Order-Up-To)", value=int(calc_targ), step=10)
                 with pol_c3:
-                    start_inv = st.number_input("Starting Inventory", value=int(target_lvl), step=10)
+                    start_inv = st.number_input("Starting Inventory", value=int(df_bt['Closing Balance'].iloc[0]) if hist_has_inv else int(target_lvl), step=10)
 
             # --- 3. Simulation Engine ---
             demand_arr = df_bt['Demand'].values
@@ -946,15 +925,12 @@ with tab4:
             for day in range(sim_len):
                 current_inv += receipts[day]
                 
-                # Fulfill
                 fulfilled = min(max(current_inv, 0), demand_arr[day])
                 current_inv -= fulfilled
                 units_fulfilled += fulfilled
                 fulfilled_arr[day] = fulfilled
-                
                 inv_history[day] = current_inv
                 
-                # Apply specific policy rules
                 if "Continuous" in policy_type:
                     inv_pos = current_inv + np.sum(receipts[day+1:day+bt_lead_time+1])
                     if inv_pos <= rop:
@@ -968,72 +944,109 @@ with tab4:
                             receipts[day + bt_lead_time] += order_qty
                             orders_placed += 1
 
-            # KPI Calculations
+            # Simulated KPIs
             total_dem = np.sum(demand_arr)
-            lost_sales = total_dem - units_fulfilled
-            fill_rate = (units_fulfilled / total_dem) * 100 if total_dem > 0 else 0
+            sim_lost_sales = total_dem - units_fulfilled
+            sim_fill_rate = (units_fulfilled / total_dem) * 100 if total_dem > 0 else 0
             
-            physical_held = np.sum(np.maximum(inv_history, 0))
-            total_hold_cost = physical_held * bt_hold_daily
+            sim_max_inv = np.max(inv_history)
+            sim_min_inv = np.min(inv_history)
+            sim_avg_inv = np.mean(inv_history)
+            
+            sim_max_wc = max(sim_max_inv, 0) * bt_unit_cost
+            sim_avg_wc = max(sim_avg_inv, 0) * bt_unit_cost
+            
+            total_hold_cost = np.sum(np.maximum(inv_history, 0)) * bt_hold_daily
             total_ord_cost = orders_placed * bt_order_cost
             total_sys_cost = total_hold_cost + total_ord_cost
 
-            # --- 4. Results & Combined Closing Stock Curve ---
+            # Historical KPIs Extraction (If Closing Balance Exists)
+            hist_max_inv = hist_min_inv = hist_avg_inv = hist_orders = hist_hold_cost = hist_ord_cost = hist_total_cost = hist_avg_wc = hist_max_wc = 0
+            if hist_has_inv:
+                hist_inv_arr = df_bt['Closing Balance'].values
+                hist_max_inv = np.max(hist_inv_arr)
+                hist_min_inv = np.min(hist_inv_arr)
+                hist_avg_inv = np.mean(hist_inv_arr)
+                
+                hist_max_wc = max(hist_max_inv, 0) * bt_unit_cost
+                hist_avg_wc = max(hist_avg_inv, 0) * bt_unit_cost
+                hist_hold_cost = np.sum(np.maximum(hist_inv_arr, 0)) * bt_hold_daily
+                
+                # Estimate Historical Orders (Checks for 'Receipts' or 'Order Placed' columns)
+                order_cols = [c for c in df_bt.columns if 'Receipt' in c or 'Order Placed' in c]
+                if order_cols:
+                    hist_orders = (pd.to_numeric(df_bt[order_cols[0]], errors='coerce').fillna(0) > 0).sum()
+                else:
+                    # Mathematical inference of historical orders if no explicit column exists
+                    inferred_receipts = np.diff(hist_inv_arr, prepend=start_inv) + demand_arr
+                    hist_orders = (inferred_receipts > 5).sum() # Threshold to avoid minor reconciliation noise
+                    
+                hist_ord_cost = hist_orders * bt_order_cost
+                hist_total_cost = hist_hold_cost + hist_ord_cost
+
+            # --- 4. Comparative Matrices ---
             st.divider()
-            st.subheader("3. Backtest Results & Financial Impact")
+            st.subheader("3. Strategy Performance & Comparative Matrices")
             
             def f_usd(v): return f"${v:,.2f}"
+            def f_unit(v): return f"{int(v)} Units"
             
-            res_c1, res_c2, res_c3, res_c4 = st.columns(4)
-            res_c1.metric("Total System Cost", f_usd(total_sys_cost))
-            res_c2.metric("Fill Rate (%)", f"{fill_rate:.2f}%", delta=f"{int(lost_sales)} Units Lost", delta_color="inverse" if lost_sales > 0 else "normal")
-            res_c3.metric("Holding Cost (Capital Blocked)", f_usd(total_hold_cost))
-            res_c4.metric("Ordering Cost (Logistics)", f_usd(total_ord_cost), delta=f"{orders_placed} Total Orders", delta_color="off")
+            # Render Comparative Tables if historical inventory data exists
+            if hist_has_inv:
+                mat_c1, mat_c2 = st.columns(2)
+                
+                with mat_c1:
+                    st.markdown("#### A. Operational & Inventory Health")
+                    ops_df = pd.DataFrame({
+                        "Metric": ["Max Inventory", "Average Inventory", "Minimum Inventory (Depth)", "Missed Sales (Lost)", "Fill Rate (%)"],
+                        "Historical Actuals": [f_unit(hist_max_inv), f_unit(hist_avg_inv), f_unit(hist_min_inv), "N/A (Derived)", "N/A"],
+                        "Simulated Policy": [f_unit(sim_max_inv), f_unit(sim_avg_inv), f_unit(sim_min_inv), f_unit(sim_lost_sales), f"{sim_fill_rate:.2f}%"]
+                    })
+                    st.dataframe(ops_df, use_container_width=True, hide_index=True)
+                    
+                with mat_c2:
+                    st.markdown("#### B. Capital & Financial Impact")
+                    fin_df = pd.DataFrame({
+                        "Metric": ["Average Working Capital", "Max Working Capital", "Total Ordering Cost", "Total Holding Cost", "Total System Cost"],
+                        "Historical Actuals": [f_usd(hist_avg_wc), f_usd(hist_max_wc), f_usd(hist_ord_cost), f_usd(hist_hold_cost), f_usd(hist_total_cost)],
+                        "Simulated Policy": [f_usd(sim_avg_wc), f_usd(sim_max_wc), f_usd(total_ord_cost), f_usd(total_hold_cost), f_usd(total_sys_cost)]
+                    })
+                    st.dataframe(fin_df, use_container_width=True, hide_index=True)
+            else:
+                # Fallback if no historical closing balance was provided
+                res_c1, res_c2, res_c3, res_c4 = st.columns(4)
+                res_c1.metric("Total System Cost", f_usd(total_sys_cost))
+                res_c2.metric("Fill Rate (%)", f"{sim_fill_rate:.2f}%", delta=f"{int(sim_lost_sales)} Units Lost", delta_color="inverse" if sim_lost_sales > 0 else "normal")
+                res_c3.metric("Holding Cost (Capital Blocked)", f_usd(total_hold_cost))
+                res_c4.metric("Ordering Cost (Logistics)", f_usd(total_ord_cost), delta=f"{orders_placed} Total Orders", delta_color="off")
 
-            # 4. Closing Stock & Demand Overlay Graph
+            # --- 5. Visualizations ---
+            st.write("<br>", unsafe_allow_html=True)
             st.markdown("#### 📉 Simulated Demand vs. Inventory Trajectory Overlay")
             st.caption("Visualizes your actual daily demand (bars) against the NEW resulting inventory levels (line) based on the policy above.")
             
             fig_close = go.Figure()
             
-            # 1. Overlay Demand Trace (Bars)
             fig_close.add_trace(go.Bar(
-                x=x_axis_hist,
-                y=df_bt['Demand'],
-                name='Actual Demand (Units)',
-                marker_color='rgba(156, 163, 175, 0.5)' # Neutral gray
+                x=x_axis_hist, y=df_bt['Demand'], name='Actual Demand (Units)', marker_color='rgba(156, 163, 175, 0.5)'
             ))
-
-            # 2. Add Closing Stock Trace (Line)
+            
             fig_close.add_trace(go.Scatter(
-                x=x_axis_hist, 
-                y=inv_history, 
-                mode='lines', 
-                name='Simulated Closing Stock',
-                line=dict(color='#2ca02c', width=2),
-                fill='tozeroy',
-                fillcolor='rgba(44, 160, 44, 0.15)'
+                x=x_axis_hist, y=inv_history, mode='lines', name='Simulated Closing Stock',
+                line=dict(color='#2ca02c', width=2), fill='tozeroy', fillcolor='rgba(44, 160, 44, 0.15)'
             ))
             
             fig_close.add_hline(y=0, line_dash="solid", line_color="#d62728", line_width=1.5)
             
-            # ROP / Target line depending on policy
             if "Continuous" in policy_type:
                 fig_close.add_hline(y=rop, line_dash="dash", line_color="#1f77b4", annotation_text="Reorder Point (ROP)", annotation_position="top left")
             else:
                 fig_close.add_hline(y=target_lvl, line_dash="dash", line_color="#1f77b4", annotation_text="Target Level", annotation_position="top left")
 
-            fig_close.update_layout(
-                template="plotly_white", 
-                xaxis_title="Historical Period", 
-                yaxis_title="Quantity (Units)",
-                height=450,
-                margin=dict(t=20, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
+            fig_close.update_layout(template="plotly_white", xaxis_title="Historical Period", yaxis_title="Quantity (Units)", height=450, margin=dict(t=20, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig_close, use_container_width=True)
             
-            # --- 5. Data Table of the Simulated Policy ---
+            # --- 6. Data Table of the Simulated Policy ---
             with st.expander("📋 View Simulated Daily Log Table"):
                 st.markdown("Raw day-by-day tracking for Demand, Fulfillment, and Simulated Inventory.")
                 
@@ -1041,7 +1054,7 @@ with tab4:
                     "Period": x_axis_hist,
                     "Demand": demand_arr.astype(int),
                     "Units Fulfilled": fulfilled_arr.astype(int),
-                    "Inventory Receipts": receipts[:sim_len].astype(int),
+                    "Simulated Receipts": receipts[:sim_len].astype(int),
                     "Simulated Closing Stock": inv_history.astype(int)
                 })
                 
@@ -1049,10 +1062,7 @@ with tab4:
                     color = '#ffcccc' if isinstance(val, (int, float)) and val < 0 else ''
                     return f'background-color: {color}'
                     
-                st.dataframe(
-                    sim_log_df.style.map(highlight_stockouts, subset=['Simulated Closing Stock']), 
-                    use_container_width=True, hide_index=True
-                )
+                st.dataframe(sim_log_df.style.map(highlight_stockouts, subset=['Simulated Closing Stock']), use_container_width=True, hide_index=True)
 
         except Exception as e:
             st.error(f"❌ An error occurred while processing the file: {e}")
