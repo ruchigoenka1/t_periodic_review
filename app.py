@@ -1092,7 +1092,7 @@ with tab3:
 #         except Exception as e:
 #             st.error(f"❌ An error occurred while processing the file: {e}")
 
-with tab6:
+with tab4:
     st.header("⚖️ Advanced Inventory Optimization Suite")
     st.markdown(
         "Analyze your inventory data through a twin-lens framework. First, review a historical backtest audit "
