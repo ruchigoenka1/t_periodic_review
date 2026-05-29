@@ -760,7 +760,7 @@ with tab3:
 
 
 
-with tab5:
+with tab4:
     st.header("🔙 Historical Policy Backtesting")
     st.markdown("""
     Upload your actual historical demand data to simulate how different inventory policies would have performed. 
