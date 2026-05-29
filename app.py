@@ -20,7 +20,7 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review", "📦 Multi-SKU Portfolio"])
+tab1, tab2, tab3, tab4 = st.tabs(["Average Demand", "📊 Demand Histogram", "🔄 Periodic Review", "Inventory Audit"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
@@ -760,283 +760,206 @@ with tab3:
 
 
 
-with tab4:
-    st.header("📦 Multi-SKU Portfolio Synchronization")
+with tab5:
+    st.header("🔙 Historical Policy Backtesting")
     st.markdown("""
-    Evaluate the financial impact of your replenishment schedule across a portfolio of products. 
-    * **Synchronized Strategy:** Order all SKUs at once. Saves on logistics/freight costs but shares vehicle capacity, requiring a shorter review period (more frequent orders).
-    * **Staggered Strategy:** Offset the review days for different SKUs. Dedicates vehicle capacity to single SKUs, allowing for larger orders and longer review periods, while smoothing out peak capital.
+    Upload your actual historical demand data to simulate how different inventory policies would have performed. 
+    Compare **Continuous Review** (ordering a fixed quantity when stock hits a minimum) against **Periodic Review** (ordering up to a target level at fixed intervals).
     """)
 
-    # --- Action: Regenerate Demand Button ---
-    btn_col1, btn_col2 = st.columns([1, 5])
-    with btn_col1:
-        if st.button("🔄 Generate New Demand", key="regen_demand_port"):
-            st.session_state.seed_counter += 1
+    # --- 1. Data Ingestion & Basic EDA ---
+    st.subheader("1. Data Upload & Demand Profiling")
+    
+    col_up1, col_up2 = st.columns([2, 1])
+    with col_up1:
+        uploaded_file = st.file_uploader("Upload Historical Demand (.csv or .xlsx). Must contain a 'Demand' column.", type=["csv", "xlsx"], key="backtest_upload")
+    
+    with col_up2:
+        st.markdown("#### 📋 Template")
+        st.caption("Ensure your file has a header named exactly **Demand**. You can optionally include a **Date** column.")
+        template_df = pd.DataFrame({'Date': pd.date_range(start='1/1/2026', periods=5), 'Demand': [120, 95, 110, 135, 80]})
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            template_df.to_excel(writer, index=False, sheet_name='Template')
+        st.download_button(label="📥 Download Template", data=buffer.getvalue(), file_name="backtest_template.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
-    # --- 1. Portfolio & Cost Parameter Setup ---
-    st.subheader("1. Portfolio Setup & Logistics Costs")
-    
-    col_setup1, col_setup2 = st.columns([3, 1])
-    
-    with col_setup1:
-        st.markdown("**SKU Demand Profiles**")
-        sku_cols = st.columns(3)
-        
-        skus = []
-        with sku_cols[0]:
-            st.markdown("##### SKU A (Fast Mover)")
-            mu_a = st.number_input("Avg Demand", value=150.0, step=10.0, key="mu_a")
-            sd_a = st.number_input("Std Dev", value=30.0, step=5.0, key="sd_a")
-            uc_a = st.number_input("Unit Cost ($)", value=25.0, step=5.0, key="uc_a")
-            skus.append({'name': 'SKU A', 'mu': mu_a, 'sd': sd_a, 'uc': uc_a})
-            
-        with sku_cols[1]:
-            st.markdown("##### SKU B (Mid Mover)")
-            mu_b = st.number_input("Avg Demand", value=60.0, step=10.0, key="mu_b")
-            sd_b = st.number_input("Std Dev", value=15.0, step=5.0, key="sd_b")
-            uc_b = st.number_input("Unit Cost ($)", value=80.0, step=5.0, key="uc_b")
-            skus.append({'name': 'SKU B', 'mu': mu_b, 'sd': sd_b, 'uc': uc_b})
-            
-        with sku_cols[2]:
-            st.markdown("##### SKU C (Slow Mover)")
-            mu_c = st.number_input("Avg Demand", value=15.0, step=5.0, key="mu_c")
-            sd_c = st.number_input("Std Dev", value=8.0, step=2.0, key="sd_c")
-            uc_c = st.number_input("Unit Cost ($)", value=300.0, step=25.0, key="uc_c")
-            skus.append({'name': 'SKU C', 'mu': mu_c, 'sd': sd_c, 'uc': uc_c})
-
-    with col_setup2:
-        st.markdown("**System Costs**")
-        header_cost = st.number_input("Fixed Order Cost ($)", value=300.0, step=50.0, help="Cost per delivery/truck (Joint cost)")
-        line_cost = st.number_input("Line Item Cost ($)", value=20.0, step=5.0, help="Cost per specific SKU added to the order")
-        holding_pct = st.number_input("Annual Holding Rate (%)", value=20.0, step=1.0)
-
-    # --- 2. Policy Configuration ---
-    st.divider()
-    st.subheader("2. Policy Configuration (Capacity-Adjusted)")
-    
-    pol_c1, pol_c2, pol_c3 = st.columns(3)
-    with pol_c1:
-        sync_review_period = st.number_input("Sync Review Period ($T_1$)", value=7, min_value=1, help="Shorter period due to shared vehicle capacity.")
-        stag_review_period = st.number_input("Staggered Review Period ($T_2$)", value=14, min_value=1, help="Longer period enabled by dedicated vehicle capacity.")
-        port_lead_time = st.number_input("Lead Time ($L$ Days)", value=7, min_value=1)
-    with pol_c2:
-        stagger_days = st.number_input("Stagger Offset (Days)", value=4, min_value=1, help="Days between staggered SKU reviews")
-        port_service_lvl = st.slider("Target Service Level (%)", min_value=80.0, max_value=99.9, value=95.0, key="port_sl")
-    with pol_c3:
-        st.info(f"""
-        **Schedule Previews:**
-        * **Sync:** All SKUs review on Day 0, {sync_review_period}, {sync_review_period*2}...
-        * **Staggered:** - SKU A: Day 0, {stag_review_period}...
-          - SKU B: Day {stagger_days}, {stagger_days+stag_review_period}...
-          - SKU C: Day {stagger_days*2}, {(stagger_days*2)+stag_review_period}...
-        """)
-
-    # --- 3. Target Level Overrides ---
-    st.divider()
-    st.subheader("3. SKU Target Level Configuration")
-    st.markdown("Optimal target levels are dynamically calculated below based on the distinct review periods for each strategy.")
-    
-    z_port = norm.ppf(port_service_lvl / 100.0)
-    
-    sync_pi = sync_review_period + port_lead_time
-    stag_pi = stag_review_period + port_lead_time
-    
-    sync_targets = []
-    stag_targets = []
-    
-    t_cols = st.columns(3)
-    for i, s in enumerate(skus):
-        with t_cols[i]:
-            sync_calc_targ = (s['mu'] * sync_pi) + (z_port * s['sd'] * np.sqrt(sync_pi))
-            stag_calc_targ = (s['mu'] * stag_pi) + (z_port * s['sd'] * np.sqrt(stag_pi))
-            
-            st.markdown(f"#### {s['name']}")
-            st.caption(f"🔵 **Sync Optimum:** {int(sync_calc_targ)} Units")
-            sync_t = st.number_input("Sync Target Level", value=int(sync_calc_targ), step=10, key=f"sync_targ_{i}")
-            st.caption(f"⚪ **Stagger Optimum:** {int(stag_calc_targ)} Units")
-            stag_t = st.number_input("Staggered Target Level", value=int(stag_calc_targ), step=10, key=f"stag_targ_{i}")
-            
-            sync_targets.append(sync_t)
-            stag_targets.append(stag_t)
-
-    # --- 4. Matrix Simulation Engine (With Burn-in & Fill Rate Tracking) ---
-    np.random.seed(st.session_state.seed_counter)
-    
-    burn_in_days = 60 
-    sim_days_actual = 365
-    total_sim_days = sim_days_actual + burn_in_days
-    num_skus = len(skus)
-    
-    demand_matrix = np.zeros((total_sim_days, num_skus))
-    for i, s in enumerate(skus):
-        demand_matrix[:, i] = np.clip(np.random.normal(s['mu'], s['sd'], total_sim_days), 0, None).round(0)
-
-    def simulate_portfolio(d_matrix, T, L, targs, head_c, line_c, offsets):
-        inv_history = np.zeros((sim_days_actual, num_skus))
-        receipts = np.zeros((total_sim_days + L + 1, num_skus))
-        current_inv = np.array(targs, dtype=float) 
-        
-        total_order_cost = 0
-        total_deliveries = 0
-        
-        # New arrays to track demand and fulfillment post burn-in for accurate fill rate
-        demand_post_burn = np.zeros(num_skus)
-        fulfilled_post_burn = np.zeros(num_skus)
-        
-        for day in range(total_sim_days):
-            current_inv += receipts[day]
-            
-            fulfilled = np.minimum(np.maximum(current_inv, 0), d_matrix[day])
-            current_inv -= fulfilled
-            
-            # Record post burn-in data
-            if day >= burn_in_days:
-                inv_history[day - burn_in_days] = current_inv
-                demand_post_burn += d_matrix[day]
-                fulfilled_post_burn += fulfilled
-            
-            skus_to_review = [i for i in range(num_skus) if day >= offsets[i] and (day - offsets[i]) % T == 0]
-            
-            skus_ordered_today = 0
-            for i in skus_to_review:
-                on_order = np.sum(receipts[day+1:day+L+1, i])
-                inv_pos = current_inv[i] + on_order
+    if uploaded_file is not None:
+        # Read Data
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df_bt = pd.read_csv(uploaded_file)
+            else:
+                df_bt = pd.read_excel(uploaded_file)
                 
-                if inv_pos < targs[i]:
-                    order_qty = targs[i] - inv_pos
-                    receipts[day + L, i] += order_qty
-                    skus_ordered_today += 1
-                    
-            if skus_ordered_today > 0 and day >= burn_in_days:
-                total_order_cost += head_c + (skus_ordered_today * line_c)
-                total_deliveries += 1
+            if 'Demand' not in df_bt.columns:
+                st.error("❌ Invalid Format: Your file must contain a column named exactly 'Demand'.")
+                st.stop()
                 
-        return inv_history, total_order_cost, total_deliveries, demand_post_burn, fulfilled_post_burn
-
-    # Run Strategies
-    sync_offsets = [0, 0, 0]
-    sync_inv, sync_ord_cost, sync_deliv, sync_dem, sync_ful = simulate_portfolio(demand_matrix, sync_review_period, port_lead_time, sync_targets, header_cost, line_cost, sync_offsets)
-    
-    stag_offsets = [0, stagger_days, stagger_days * 2]
-    stag_inv, stag_ord_cost, stag_deliv, stag_dem, stag_ful = simulate_portfolio(demand_matrix, stag_review_period, port_lead_time, stag_targets, header_cost, line_cost, stag_offsets)
-
-    # Working Capital 
-    unit_costs = np.array([s['uc'] for s in skus])
-    sync_wc_daily = np.sum(np.maximum(sync_inv, 0) * unit_costs, axis=1)
-    stag_wc_daily = np.sum(np.maximum(stag_inv, 0) * unit_costs, axis=1)
-    
-    hold_rate_daily = holding_pct / 100.0 / 365.0
-    sync_hold_cost = np.sum(sync_wc_daily) * hold_rate_daily
-    stag_hold_cost = np.sum(stag_wc_daily) * hold_rate_daily
-
-    # Fill Rates Calculation
-    sync_fr_arr = (sync_ful / sync_dem) * 100
-    stag_fr_arr = (stag_ful / stag_dem) * 100
-    
-    sync_port_fr = (np.sum(sync_ful) / np.sum(sync_dem)) * 100 if np.sum(sync_dem) > 0 else 0
-    stag_port_fr = (np.sum(stag_ful) / np.sum(stag_dem)) * 100 if np.sum(stag_dem) > 0 else 0
-
-    # --- 5. Portfolio KPI Dashboard & Matrices ---
-    st.divider()
-    st.subheader("4. Portfolio KPI Dashboard")
-    
-    def f_usd(v): return f"${v:,.0f}"
-    
-    # Financial Scorecard
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.metric("Sync Peak Capital", f_usd(np.max(sync_wc_daily)))
-        st.metric("Stagger Peak Capital", f_usd(np.max(stag_wc_daily)), 
-                  delta=f_usd(np.max(stag_wc_daily) - np.max(sync_wc_daily)), delta_color="inverse")
-    with k2:
-        st.metric("Sync Avg Capital", f_usd(np.mean(sync_wc_daily)))
-        st.metric("Stagger Avg Capital", f_usd(np.mean(stag_wc_daily)), 
-                  delta=f_usd(np.mean(stag_wc_daily) - np.mean(sync_wc_daily)), delta_color="inverse")
-    with k3:
-        st.metric("Sync Logistics Cost", f_usd(sync_ord_cost))
-        st.metric("Stagger Logistics Cost", f_usd(stag_ord_cost), 
-                  delta=f_usd(stag_ord_cost - sync_ord_cost), delta_color="inverse")
-    with k4:
-        st.metric("Sync Total System Cost", f_usd(sync_ord_cost + sync_hold_cost))
-        st.metric("Stagger Total System Cost", f_usd(stag_ord_cost + stag_hold_cost), 
-                  delta=f_usd((stag_ord_cost + stag_hold_cost) - (sync_ord_cost + sync_hold_cost)), delta_color="inverse")
-
-    st.write("<br>", unsafe_allow_html=True)
-    mat_col1, mat_col2 = st.columns(2)
-    
-    # Logistics Matrix
-    with mat_col1:
-        st.markdown("#### 🚚 Logistics Delivery Matrix")
-        log_df = pd.DataFrame({
-            "Metric": ["Total Truck Deliveries / Events"],
-            "Synchronized": [f"{sync_deliv}"],
-            "Staggered": [f"{stag_deliv}"]
-        })
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
-        
-    # Fill Rate Matrix
-    with mat_col2:
-        st.markdown("#### 🎯 Service Level (Fill Rate) Matrix")
-        fr_data = {
-            "Item": [s['name'] for s in skus] + ["Portfolio Overall"],
-            "Sync Fill Rate": [f"{v:.2f}%" for v in sync_fr_arr] + [f"{sync_port_fr:.2f}%"],
-            "Staggered Fill Rate": [f"{v:.2f}%" for v in stag_fr_arr] + [f"{stag_port_fr:.2f}%"]
-        }
-        st.dataframe(pd.DataFrame(fr_data), use_container_width=True, hide_index=True)
-
-    # --- 6. Visualizations ---
-    st.divider()
-    st.subheader("5. Strategic Visualizations")
-    
-    # 6A. Total Working Capital
-    st.markdown("#### 📉 Total Blocked Working Capital Trajectory")
-    fig_port = go.Figure()
-    fig_port.add_trace(go.Scatter(
-        x=list(range(sim_days_actual)), y=sync_wc_daily, 
-        mode='lines', fill='tozeroy', name='Synchronized Strategy',
-        line=dict(color='#d62728', width=2), fillcolor='rgba(214, 39, 40, 0.1)'
-    ))
-    fig_port.add_trace(go.Scatter(
-        x=list(range(sim_days_actual)), y=stag_wc_daily, 
-        mode='lines', fill='tozeroy', name='Staggered Strategy',
-        line=dict(color='#1f77b4', width=2), fillcolor='rgba(31, 119, 180, 0.3)'
-    ))
-    fig_port.update_layout(
-        template="plotly_white", xaxis_title="Simulation Day (Post Burn-In)", yaxis_title="Combined Capital Blocked ($)",
-        height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    st.plotly_chart(fig_port, use_container_width=True)
-
-    # 6B. SKU-Specific Inventory Trajectories
-    st.markdown("#### 📦 Individual SKU Physical Inventory")
-    st.caption("Compare physical unit levels for specific SKUs to see how decoupled review periods alter stock depth.")
-    
-    sku_tabs = st.tabs([s['name'] for s in skus])
-    
-    for i, s in enumerate(skus):
-        with sku_tabs[i]:
-            fig_sku = go.Figure()
+            df_bt['Demand'] = pd.to_numeric(df_bt['Demand'], errors='coerce').fillna(0)
             
-            fig_sku.add_trace(go.Scatter(
-                x=list(range(sim_days_actual)), y=sync_inv[:, i], 
-                mode='lines', name=f"Synchronized ({sync_review_period}-Day Review)",
-                line=dict(color='#d62728', width=2)
-            ))
+            # 3. Demand Mean, Std Dev and CoV
+            mean_dem = df_bt['Demand'].mean()
+            std_dem = df_bt['Demand'].std()
+            cov_dem = (std_dem / mean_dem) if mean_dem > 0 else 0
             
-            fig_sku.add_trace(go.Scatter(
-                x=list(range(sim_days_actual)), y=stag_inv[:, i], 
-                mode='lines', name=f"Staggered ({stag_review_period}-Day Review)",
-                line=dict(color='#1f77b4', width=2, dash='dot')
-            ))
+            st.markdown("#### 📊 Statistical Profile")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Periods (Days)", len(df_bt))
+            m2.metric("Mean Demand ($\mu$)", f"{mean_dem:.1f}")
+            m3.metric("Std Dev ($\sigma$)", f"{std_dem:.1f}")
+            m4.metric("CoV", f"{cov_dem:.3f}", delta="High Volatility" if cov_dem > 0.5 else "Stable", delta_color="inverse" if cov_dem > 0.5 else "normal")
             
-            fig_sku.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
+            # 1 & 2. Demand Line Graph and Histogram
+            st.write("<br>", unsafe_allow_html=True)
+            chart_c1, chart_c2 = st.columns(2)
             
-            fig_sku.update_layout(
-                template="plotly_white", 
-                xaxis_title="Simulation Day (Post Burn-In)", 
-                yaxis_title="Physical Units On Hand",
-                height=350, 
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            with chart_c1:
+                st.markdown("**📉 Historical Demand Curve**")
+                fig_line = px.line(df_bt, y='Demand', template="plotly_white", color_discrete_sequence=['#1f77b4'])
+                fig_line.update_layout(height=300, xaxis_title="Period", yaxis_title="Units", margin=dict(t=10, b=10))
+                st.plotly_chart(fig_line, use_container_width=True)
+                
+            with chart_c2:
+                st.markdown("**📊 Demand Distribution (Histogram)**")
+                fig_hist = px.histogram(df_bt, x='Demand', nbins=20, template="plotly_white", color_discrete_sequence=['#ff7f0e'])
+                fig_hist.update_layout(height=300, xaxis_title="Demand Quantity", yaxis_title="Frequency", margin=dict(t=10, b=10))
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            # --- 2. Cost & Policy Configuration ---
+            st.divider()
+            st.subheader("2. Financial Costs & Policy Configuration")
+            
+            # 5. User Input: Holding Cost (%), Ordering Cost
+            cost_c1, cost_c2, cost_c3, cost_c4 = st.columns(4)
+            with cost_c1:
+                bt_unit_cost = st.number_input("Unit Cost ($)", value=50.0, step=5.0, key="bt_uc")
+            with cost_c2:
+                bt_order_cost = st.number_input("Ordering Cost ($/order)", value=250.0, step=50.0, key="bt_oc")
+            with cost_c3:
+                bt_hold_pct = st.number_input("Annual Holding Cost (%)", value=20.0, step=1.0, key="bt_hp")
+            with cost_c4:
+                bt_lead_time = st.number_input("Lead Time (Days)", value=7, min_value=1, step=1, key="bt_lt")
+                
+            bt_hold_daily = (bt_unit_cost * (bt_hold_pct / 100.0)) / 365.0
+
+            # 7. Policy Selection Toggle
+            st.write("<br>", unsafe_allow_html=True)
+            policy_type = st.radio(
+                "Select Inventory Control Policy to Backtest:", 
+                ["Continuous Review (Reorder Point & Fixed Qty)", "Periodic Review (Fixed Interval & Target Level)"],
+                horizontal=True
             )
-            st.plotly_chart(fig_sku, use_container_width=True)
+            
+            pol_c1, pol_c2, pol_c3 = st.columns(3)
+            
+            # Dynamic UI based on policy selection
+            if "Continuous" in policy_type:
+                with pol_c1:
+                    rop = st.number_input("Reorder Point (ROP)", value=int(mean_dem * bt_lead_time + std_dem * 1.64 * np.sqrt(bt_lead_time)), step=10, help="Order is triggered when inventory drops below this.")
+                with pol_c2:
+                    eoq_est = np.sqrt((2 * (mean_dem*365) * bt_order_cost) / (bt_unit_cost * (bt_hold_pct/100)))
+                    order_q = st.number_input("Order Quantity (Q)", value=int(eoq_est) if eoq_est > 0 else 100, step=10, help="Fixed amount ordered each time.")
+                with pol_c3:
+                    start_inv = st.number_input("Starting Inventory", value=int(rop + order_q/2), step=10)
+            else:
+                with pol_c1:
+                    review_t = st.number_input("Review Period (Days)", value=14, min_value=1, step=1)
+                with pol_c2:
+                    pi = review_t + bt_lead_time
+                    calc_targ = (mean_dem * pi) + (1.64 * std_dem * np.sqrt(pi))
+                    target_lvl = st.number_input("Target Level (Order-Up-To)", value=int(calc_targ), step=10)
+                with pol_c3:
+                    start_inv = st.number_input("Starting Inventory", value=int(target_lvl), step=10)
+
+            # --- 3. Simulation Engine ---
+            demand_arr = df_bt['Demand'].values
+            sim_len = len(demand_arr)
+            
+            inv_history = np.zeros(sim_len)
+            receipts = np.zeros(sim_len + bt_lead_time + 1)
+            
+            current_inv = float(start_inv)
+            orders_placed = 0
+            units_fulfilled = 0
+            
+            for day in range(sim_len):
+                current_inv += receipts[day]
+                
+                # Fulfill
+                fulfilled = min(max(current_inv, 0), demand_arr[day])
+                current_inv -= fulfilled
+                units_fulfilled += fulfilled
+                
+                inv_history[day] = current_inv
+                
+                # Apply specific policy rules
+                if "Continuous" in policy_type:
+                    # Check position daily
+                    inv_pos = current_inv + np.sum(receipts[day+1:day+bt_lead_time+1])
+                    if inv_pos <= rop:
+                        receipts[day + bt_lead_time] += order_q
+                        orders_placed += 1
+                else:
+                    # Check position only on review days
+                    if day % review_t == 0:
+                        inv_pos = current_inv + np.sum(receipts[day+1:day+bt_lead_time+1])
+                        if inv_pos < target_lvl:
+                            order_qty = target_lvl - inv_pos
+                            receipts[day + bt_lead_time] += order_qty
+                            orders_placed += 1
+
+            # KPI Calculations
+            total_dem = np.sum(demand_arr)
+            lost_sales = total_dem - units_fulfilled
+            fill_rate = (units_fulfilled / total_dem) * 100 if total_dem > 0 else 0
+            
+            physical_held = np.sum(np.maximum(inv_history, 0))
+            total_hold_cost = physical_held * bt_hold_daily
+            total_ord_cost = orders_placed * bt_order_cost
+            total_sys_cost = total_hold_cost + total_ord_cost
+
+            # --- 4. Results & Closing Stock Curve ---
+            st.divider()
+            st.subheader("3. Backtest Results & Financial Impact")
+            
+            def f_usd(v): return f"${v:,.2f}"
+            
+            res_c1, res_c2, res_c3, res_c4 = st.columns(4)
+            res_c1.metric("Total System Cost", f_usd(total_sys_cost))
+            res_c2.metric("Fill Rate (%)", f"{fill_rate:.2f}%", delta=f"{int(lost_sales)} Units Lost", delta_color="inverse" if lost_sales > 0 else "normal")
+            res_c3.metric("Holding Cost (Capital Blocked)", f_usd(total_hold_cost))
+            res_c4.metric("Ordering Cost (Logistics)", f_usd(total_ord_cost), delta=f"{orders_placed} Total Orders", delta_color="off")
+
+            # 4. Closing Stock Inventory Curve
+            st.markdown("#### 📉 Closing Stock Inventory Curve")
+            st.caption("Visualizes the actual daily ending inventory balances over the historical timeline.")
+            
+            fig_close = go.Figure()
+            fig_close.add_trace(go.Scatter(
+                x=df_bt.index if 'Date' not in df_bt.columns else df_bt['Date'], 
+                y=inv_history, 
+                mode='lines', 
+                name='Closing Stock',
+                line=dict(color='#2ca02c', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(44, 160, 44, 0.1)'
+            ))
+            fig_close.add_hline(y=0, line_dash="solid", line_color="#d62728", line_width=1.5)
+            
+            # Optional: Add ROP line if continuous review
+            if "Continuous" in policy_type:
+                fig_close.add_hline(y=rop, line_dash="dash", line_color="#1f77b4", annotation_text="Reorder Point (ROP)", annotation_position="top left")
+            else:
+                fig_close.add_hline(y=target_lvl, line_dash="dash", line_color="#1f77b4", annotation_text="Target Level", annotation_position="top left")
+
+            fig_close.update_layout(
+                template="plotly_white", 
+                xaxis_title="Historical Period", 
+                yaxis_title="Physical Units On Hand",
+                height=400,
+                margin=dict(t=20, b=20)
+            )
+            st.plotly_chart(fig_close, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"❌ An error occurred while processing the file: {e}")
