@@ -772,11 +772,11 @@ with tab4:
     
     col_up1, col_up2 = st.columns([2, 1])
     with col_up1:
-        uploaded_file = st.file_uploader("Upload Historical Demand (.csv or .xlsx). Must contain a 'Demand' column.", type=["csv", "xlsx"], key="backtest_upload")
+        uploaded_file = st.file_uploader("Upload Historical Demand (.csv or .xlsx).", type=["csv", "xlsx"], key="backtest_upload")
     
     with col_up2:
         st.markdown("#### 📋 Template")
-        st.caption("Ensure your file has a header named exactly **Demand**. You can optionally include a **Date** column.")
+        st.caption("Ensure your file has a header named **Demand**, **Store Sale**, or select it manually upon upload.")
         template_df = pd.DataFrame({'Date': pd.date_range(start='1/1/2026', periods=5), 'Demand': [120, 95, 110, 135, 80]})
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -791,13 +791,27 @@ with tab4:
             else:
                 df_bt = pd.read_excel(uploaded_file)
                 
+            # --- Dynamic Column Mapping ---
+            # Auto-map known columns from uploaded files
+            if 'Store Sale' in df_bt.columns:
+                df_bt.rename(columns={'Store Sale': 'Demand'}, inplace=True)
+            elif 'Bhiwandi Sales' in df_bt.columns:
+                df_bt.rename(columns={'Bhiwandi Sales': 'Demand'}, inplace=True)
+            elif 'Sales' in df_bt.columns:
+                df_bt.rename(columns={'Sales': 'Demand'}, inplace=True)
+                
+            # Fallback if no known demand column is found
             if 'Demand' not in df_bt.columns:
-                st.error("❌ Invalid Format: Your file must contain a column named exactly 'Demand'.")
-                st.stop()
+                st.warning("⚠️ Could not automatically detect a 'Demand' column.")
+                selected_col = st.selectbox("Please select the column that represents your daily demand:", df_bt.columns)
+                if selected_col:
+                    df_bt.rename(columns={selected_col: 'Demand'}, inplace=True)
+                else:
+                    st.stop()
                 
             df_bt['Demand'] = pd.to_numeric(df_bt['Demand'], errors='coerce').fillna(0)
             
-            # 3. Demand Mean, Std Dev and CoV
+            # --- 3. Demand Mean, Std Dev and CoV ---
             mean_dem = df_bt['Demand'].mean()
             std_dem = df_bt['Demand'].std()
             cov_dem = (std_dem / mean_dem) if mean_dem > 0 else 0
@@ -857,7 +871,7 @@ with tab4:
                 with pol_c1:
                     rop = st.number_input("Reorder Point (ROP)", value=int(mean_dem * bt_lead_time + std_dem * 1.64 * np.sqrt(bt_lead_time)), step=10, help="Order is triggered when inventory drops below this.")
                 with pol_c2:
-                    eoq_est = np.sqrt((2 * (mean_dem*365) * bt_order_cost) / (bt_unit_cost * (bt_hold_pct/100)))
+                    eoq_est = np.sqrt((2 * (mean_dem*365) * bt_order_cost) / (bt_unit_cost * (bt_hold_pct/100))) if bt_hold_pct > 0 else 100
                     order_q = st.number_input("Order Quantity (Q)", value=int(eoq_est) if eoq_est > 0 else 100, step=10, help="Fixed amount ordered each time.")
                 with pol_c3:
                     start_inv = st.number_input("Starting Inventory", value=int(rop + order_q/2), step=10)
@@ -935,8 +949,16 @@ with tab4:
             st.caption("Visualizes the actual daily ending inventory balances over the historical timeline.")
             
             fig_close = go.Figure()
+            
+            # Check for generic 'Day' column or 'Date' column to plot against
+            x_axis = df_bt.index
+            if 'Date' in df_bt.columns:
+                x_axis = df_bt['Date']
+            elif 'Day' in df_bt.columns:
+                x_axis = df_bt['Day']
+                
             fig_close.add_trace(go.Scatter(
-                x=df_bt.index if 'Date' not in df_bt.columns else df_bt['Date'], 
+                x=x_axis, 
                 y=inv_history, 
                 mode='lines', 
                 name='Closing Stock',
@@ -946,7 +968,7 @@ with tab4:
             ))
             fig_close.add_hline(y=0, line_dash="solid", line_color="#d62728", line_width=1.5)
             
-            # Optional: Add ROP line if continuous review
+            # Optional: Add ROP/Target line depending on policy
             if "Continuous" in policy_type:
                 fig_close.add_hline(y=rop, line_dash="dash", line_color="#1f77b4", annotation_text="Reorder Point (ROP)", annotation_position="top left")
             else:
