@@ -1043,3 +1043,16 @@ with tab4:
                     "Units Fulfilled": fulfilled_arr.astype(int),
                     "Inventory Receipts": receipts[:sim_len].astype(int),
                     "Simulated Closing Stock": inv_history.astype(int)
+                })
+                
+                def highlight_stockouts(val):
+                    color = '#ffcccc' if isinstance(val, (int, float)) and val < 0 else ''
+                    return f'background-color: {color}'
+                    
+                st.dataframe(
+                    sim_log_df.style.map(highlight_stockouts, subset=['Simulated Closing Stock']), 
+                    use_container_width=True, hide_index=True
+                )
+
+        except Exception as e:
+            st.error(f"❌ An error occurred while processing the file: {e}")
