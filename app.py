@@ -272,10 +272,18 @@ with tab2:
                     
                     available_columns = df_upload.columns.tolist()
                     
-                    if 'Demand' not in available_columns:
-                        st.warning("⚠️ Column named 'Demand' not found. Please select the appropriate column below:")
-                    
-                    default_idx = available_columns.index('Demand') if 'Demand' in available_columns else 0
+                    # --- NEW LOGIC: Check for both 'Demand' and 'Store Sale' ---
+                    target_col = None
+                    if 'Demand' in available_columns:
+                        target_col = 'Demand'
+                    elif 'Store Sale' in available_columns:
+                        target_col = 'Store Sale'
+                        
+                    if target_col is None:
+                        st.warning("⚠️ Column named 'Demand' or 'Store Sale' not found. Please select the appropriate column below:")
+                        default_idx = 0
+                    else:
+                        default_idx = available_columns.index(target_col)
                     
                     selected_column = st.selectbox("Select the Demand Data Column:", options=available_columns, index=default_idx)
                     
@@ -443,8 +451,6 @@ with tab2:
             "Cum. %": pct_total.cumsum().round(1)
         })
         st.dataframe(bin_df, use_container_width=True, hide_index=True)
-        
-
 
 # ==========================================
 # TAB 3: PERIODIC REVIEW (VECTORIZED LOGIC)
