@@ -270,19 +270,32 @@ with tab2:
                     else:
                         df_upload = pd.read_excel(uploaded_file)
                     
-                    if 'Demand' in df_upload.columns:
-                        df = df_upload[['Demand']].dropna().copy()
+                    # Extract available columns
+                    available_columns = df_upload.columns.tolist()
+                    
+                    if 'Demand' not in available_columns:
+                        st.warning("⚠️ Column named 'Demand' not found. Please select the appropriate column below:")
+                    
+                    # Determine default index
+                    default_idx = available_columns.index('Demand') if 'Demand' in available_columns else 0
+                    
+                    # Allow user to select the demand column
+                    selected_column = st.selectbox("Select the Demand Data Column:", options=available_columns, index=default_idx)
+                    
+                    if selected_column:
+                        df = df_upload[[selected_column]].dropna().copy()
+                        # Rename internally so the rest of the code logic works flawlessly
+                        df.rename(columns={selected_column: 'Demand'}, inplace=True)
                         df['Demand'] = pd.to_numeric(df['Demand'], errors='coerce')
                         df = df.dropna()
-                        st.success("✅ File successfully uploaded and parsed!")
-                    else:
-                        st.error("❌ Invalid Format: Your file must contain a column named exactly **'Demand'**.")
+                        st.success(f"✅ File successfully parsed using column: **{selected_column}**")
+                        
                 except Exception as e:
                     st.error(f"❌ Error loading file: {e}")
                     
         with up_col2:
             st.markdown("#### 📋 Download Template")
-            st.caption("Please match your data format to this template. The sheet must include a column header named **Demand**.")
+            st.caption("Please match your data format to this template. Alternatively, you can upload any file and select the target column.")
             
             template_df = pd.DataFrame({'Demand': [120, 95, 110, 135, 80, 105, 115]})
             buffer = io.BytesIO()
@@ -440,7 +453,6 @@ with tab2:
                 
             st.markdown(f"### Profile: {status_text}")
             st.info(explanation)
-
 # ==========================================
 # TAB 3: PERIODIC REVIEW (VECTORIZED LOGIC)
 # ==========================================
