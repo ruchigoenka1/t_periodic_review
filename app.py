@@ -453,8 +453,6 @@ with tab2:
         st.dataframe(bin_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    # Optional: You can move the CSS to the top of your main script if you want it applied globally.
-    # It is kept here for continuity with your original code.
     st.markdown(
         """
         <style>
@@ -471,7 +469,7 @@ with tab3:
     st.header("Inventory Policy Simulator")
 
     # ------------------------------------------------
-    # Inputs (Moved from sidebar to tab layout for clean multi-tab UX)
+    # Inputs 
     # ------------------------------------------------
     with st.expander("⚙️ Inventory Simulation Inputs", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
@@ -691,48 +689,52 @@ with tab3:
     # ------------------------------------------------
     # Visualizations
     # ------------------------------------------------
+    
+    # Full Width Chart
+    st.markdown("#### Inventory Behaviour")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing Inventory"))
+    fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance Including Pipeline"], name="Inventory Position"))
+    fig.add_hline(y=reorder_point, line_dash="dash", annotation_text="Reorder Point")
+
+    stockouts = df[df["Closing Balance"] == 0]
+    fig.add_trace(go.Scatter(x=stockouts["Date"], y=stockouts["Closing Balance"], mode="markers", name="Stockout", marker=dict(color="red", size=9)))
+
+    reorders = df[df["New Order"] > 0]
+    fig.add_trace(go.Scatter(x=reorders["Date"], y=reorders["Closing Balance"], mode="markers", name="Reorder Trigger", marker=dict(color="green", symbol="triangle-up", size=10)))
+
+    fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.08)
+    fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.08)
+    fig.add_hrect(y0=reorder_point, y1=df["Closing Balance Including Pipeline"].max()*1.2, fillcolor="green", opacity=0.05)
+    fig.update_yaxes(rangemode="tozero")
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Secondary Charts in a 2x2 Grid
     chart_col1, chart_col2 = st.columns(2)
     
     with chart_col1:
-        st.markdown("#### Inventory Behaviour")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing Inventory"))
-        fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance Including Pipeline"], name="Inventory Position"))
-        fig.add_hline(y=reorder_point, line_dash="dash", annotation_text="Reorder Point")
-
-        stockouts = df[df["Closing Balance"] == 0]
-        fig.add_trace(go.Scatter(x=stockouts["Date"], y=stockouts["Closing Balance"], mode="markers", name="Stockout", marker=dict(color="red", size=9)))
-
-        reorders = df[df["New Order"] > 0]
-        fig.add_trace(go.Scatter(x=reorders["Date"], y=reorders["Closing Balance"], mode="markers", name="Reorder Trigger", marker=dict(color="green", symbol="triangle-up", size=10)))
-
-        fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.08)
-        fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.08)
-        fig.add_hrect(y0=reorder_point, y1=df["Closing Balance Including Pipeline"].max()*1.2, fillcolor="green", opacity=0.05)
-        fig.update_yaxes(rangemode="tozero")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with chart_col2:
         st.markdown("#### Pipeline Inventory")
         fig_pipeline = px.line(df, x="Date", y="Pipeline Order")
         st.plotly_chart(fig_pipeline, use_container_width=True)
 
-    chart_col3, chart_col4 = st.columns(2)
-
-    with chart_col3:
+    with chart_col2:
         st.markdown("#### Orders Placed")
         orders = df[df["New Order"] > 0]
         fig_orders = px.scatter(orders, x="Date", y="New Order")
         st.plotly_chart(fig_orders, use_container_width=True)
 
-    with chart_col4:
+    chart_col3, chart_col4 = st.columns(2)
+
+    with chart_col3:
         st.markdown("#### Blocked Working Capital")
         fig_wc = px.line(df, x="Date", y="Blocked Working Capital")
         st.plotly_chart(fig_wc, use_container_width=True)
 
-    st.markdown("#### Demand Distribution")
-    fig_hist = px.histogram(df, x="Demand", nbins=20)
-    st.plotly_chart(fig_hist, use_container_width=True)
+    with chart_col4:
+        st.markdown("#### Demand Distribution")
+        fig_hist = px.histogram(df, x="Demand", nbins=20)
+        st.plotly_chart(fig_hist, use_container_width=True)
 
     # ------------------------------------------------
     # Inventory Waterfall
@@ -759,7 +761,7 @@ with tab3:
     # ------------------------------------------------
     with st.expander("📊 View Raw Simulation Data"):
         st.dataframe(df, use_container_width=True)
-
+        
 
 # ==========================================
 # TAB 3: PERIODIC REVIEW (VECTORIZED LOGIC)
