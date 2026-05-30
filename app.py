@@ -461,7 +461,6 @@ with tab3:
             padding-right: 2rem;
             padding-top: 2rem;
         }
-        /* Optional: Add a slight border to the left column to separate it visually */
         [data-testid="column"]:first-child {
             border-right: 1px solid rgba(255, 255, 255, 0.1);
             padding-right: 2rem;
@@ -474,7 +473,7 @@ with tab3:
     st.header("Inventory Policy Simulator")
     st.divider()
 
-    # Create the main split layout: Left Panel (1 part width) vs Right Panel (3 parts width)
+    # Main split layout
     input_col, output_col = st.columns([1, 3])
 
     # ================================================
@@ -562,7 +561,7 @@ with tab3:
         "Inventory Position", "New Order", "Closing Balance", "Closing Balance Including Pipeline"
     ])
 
-    # KPIs
+    # KPI logic execution
     stockout_days = (df["Closing Balance"] == 0).sum()
     average_inventory = df["Closing Balance Including Pipeline"].mean()
     average_age_inventory = average_inventory / df["Demand"].mean() if df["Demand"].mean() > 0 else 0
@@ -631,17 +630,43 @@ with tab3:
     # ================================================
     with output_col:
         
-        # 1. Top Level KPIs
-        st.subheader("📊 Performance Metrics")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Stockout Days", stockout_days)
-        c2.metric("Avg Inventory", round(average_inventory, 0))
-        c3.metric("Avg Working Capital", f"${round(average_working_capital, 0):,}")
-        c4.metric("Total Inventory Cost", f"${round(total_inventory_cost, 0):,}")
+        # Matrix Collapsible Section 1: Core KPIs
+        with st.expander("📊 View Core Inventory & Financial Metrics", expanded=True):
+            st.markdown("#### Primary KPIs")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Stockout Days", stockout_days)
+            c2.metric("Avg Age of Inventory", round(average_age_inventory, 1))
+            c3.metric("Average Inventory", round(average_inventory, 0))
+            c4.metric("Avg Working Capital", f"${round(average_working_capital, 0):,}")
 
-        st.divider()
+            st.markdown("#### Inventory & Capital Ranges")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Minimum Inventory", round(min_inventory, 0))
+            r2.metric("Maximum Inventory", round(max_inventory, 0))
+            r3.metric("Min Working Capital", f"${round(min_wc, 0):,}")
+            r4.metric("Max Working Capital", f"${round(max_wc, 0):,}")
 
-        # 2. Main Chart (Spans the full width of the right column)
+            st.markdown("#### Cost Metrics Breakdown")
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("Total Holding Cost", f"${round(total_holding_cost, 0):,}")
+            cc2.metric("Total Ordering Cost", f"${round(total_ordering_cost, 0):,}")
+            cc3.metric("Total Inventory Cost", f"${round(total_inventory_cost, 0):,}")
+
+        # Matrix Collapsible Section 2: Optimization
+        with st.expander("💡 View EOQ & Policy Optimization", expanded=False):
+            st.markdown("#### Economic Order Quantity (EOQ)")
+            e1, e2 = st.columns(2)
+            e1.metric("Economic Order Quantity (EOQ)", round(eoq, 0))
+            e2.metric("Selected Order Quantity", order_qty)
+            
+            st.markdown("#### Policy Financial Comparison")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Cost with Current Policy", f"${round(cost_current_policy, 0):,}")
+            k2.metric("Cost with EOQ Policy", f"${round(cost_eoq_policy, 0):,}")
+            k3.metric("Savings Using EOQ", f"${round(cost_current_policy - cost_eoq_policy, 0):,}")
+
+
+        # Main Behaviour Chart
         st.markdown("#### Inventory Behaviour")
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing Inventory"))
@@ -663,46 +688,36 @@ with tab3:
         st.plotly_chart(fig, use_container_width=True)
         st.divider()
 
-        # 3. Cost & Optimization Details
-        st.subheader("💡 EOQ Optimization")
-        e1, e2, e3, e4 = st.columns(4)
-        e1.metric("Economic Order Qty", round(eoq, 0))
-        e2.metric("Current Policy Cost", f"${round(cost_current_policy, 0):,}")
-        e3.metric("Cost with EOQ", f"${round(cost_eoq_policy, 0):,}")
-        e4.metric("Potential Savings", f"${round(cost_current_policy - cost_eoq_policy, 0):,}")
-
-        st.divider()
-
-        # 4. Secondary Analytics (2x2 Grid)
+        # Secondary Charts (Grid Layout)
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
             st.markdown("#### Blocked Working Capital")
             fig_wc = px.line(df, x="Date", y="Blocked Working Capital")
-            fig_wc.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=300)
+            fig_wc.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=280)
             st.plotly_chart(fig_wc, use_container_width=True)
 
             st.markdown("#### Demand Distribution")
             fig_hist = px.histogram(df, x="Demand", nbins=20)
-            fig_hist.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=300)
+            fig_hist.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=280)
             st.plotly_chart(fig_hist, use_container_width=True)
 
         with chart_col2:
             st.markdown("#### Pipeline Orders")
             fig_pipeline = px.line(df, x="Date", y="Pipeline Order")
-            fig_pipeline.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=300)
+            fig_pipeline.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=280)
             st.plotly_chart(fig_pipeline, use_container_width=True)
 
             st.markdown("#### Orders Placed")
             orders = df[df["New Order"] > 0]
             fig_orders = px.scatter(orders, x="Date", y="New Order")
-            fig_orders.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=300)
+            fig_orders.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=280)
             st.plotly_chart(fig_orders, use_container_width=True)
 
         st.divider()
 
-        # 5. Data Tables at the bottom
-        with st.expander("📊 View Detailed Data & Waterfall Analysis"):
+        # Deep Dives (Expanders to conserve vertical space)
+        with st.expander("📊 View Interactive Waterfall Analysis & Raw Data"):
             st.markdown("#### Inventory Flow Waterfall")
             selected_day = st.slider("Select Day for Waterfall Analysis", 0, len(df)-1, 0, key="waterfall_slider")
             row = df.iloc[selected_day]
@@ -712,6 +727,7 @@ with tab3:
                 x=["Opening Balance", "Demand", "Shipment Received", "Closing Balance"],
                 y=[row["Opening Balance"], -row["Demand"], row["Shipment Received"], row["Closing Balance"]]
             ))
+            fig_waterfall.update_layout(margin=dict(l=0, r=0, t=30, b=0))
             st.plotly_chart(fig_waterfall, use_container_width=True)
             
             st.markdown("#### Simulation Output Table")
