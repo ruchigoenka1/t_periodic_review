@@ -2169,93 +2169,137 @@ with tab5:
 with tab6:
     st.header("Multi-SKU Dynamic Inventory Simulator")
 
-    horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
-    st.markdown("### 1. Define SKU Policies")
+    # Helper function integrated inside the tab scope
+    def calculate_z_score(service_level_pct):
+        p = service_level_pct / 100.0
+        if p >= 0.9999: return 3.719 # Cap for extreme values
+        if p <= 0.5: return 0.0
+        
+        # Rational approximation for standard normal inverse (Abramowitz & Stegun)
+        t = np.sqrt(-2.0 * np.log(1.0 - p))
+        num = 2.515517 + 0.802853 * t + 0.010328 * t**2
+        den = 1.0 + 1.432788 * t + 0.189269 * t**2 + 0.001308 * t**3
+        z = t - (num / den)
+        return z
+
+    # Global Parameters
+    colA, colB = st.columns(2)
+    with colA:
+        horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
+    with colB:
+        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1, help="Drives Safety Stock calculations")
     
+    Z_score = calculate_z_score(service_level)
+    
+    st.markdown("### 1. Define SKU Policies")
     sku_data_list = []
 
-    def render_policy_section(title, policy_type, start_idx, end_idx, p1_label, p2_label, default_overrides):
-        with st.expander(title, expanded=True):
-            # 1. Header Row (Expanded to 11 tight columns)
-            hc = st.columns([1, 0.8, 0.8, 0.8, 0.7, 1, 0.9, 0.9, 0.8, 0.8, 0.8])
-            hc[0].markdown("**SKU**")
-            hc[1].markdown("**Cost**")
-            hc[2].markdown("**Dmd**")
-            hc[3].markdown("**Std**")
-            hc[4].markdown("**LT**")
-            hc[5].markdown("**Init Inv**")
-            hc[6].markdown(f"**{p1_label}**")
-            hc[7].markdown(f"**{p2_label}**")
-            hc[8].markdown("**Off**")
-            hc[9].markdown("**Ord(₹)**")
-            hc[10].markdown("**Hld(%)**")
+    # 1A. Continuous Review Section
+    with st.expander("🔄 Continuous Review (s, Q) - SKUs 01 to 05", expanded=True):
+        # 11 Columns for Continuous
+        hc = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.6, 0.8, 0.8, 1])
+        hc[0].markdown("**SKU**")
+        hc[1].markdown("**Cost**")
+        hc[2].markdown("**Dmd**")
+        hc[3].markdown("**Std**")
+        hc[4].markdown("**LT**")
+        hc[5].markdown("**Ord(₹)**")
+        hc[6].markdown("**Hld%**")
+        hc[7].markdown("**Off**")
+        hc[8].markdown("**s** (Calc)")
+        hc[9].markdown("**Q** (Calc)")
+        hc[10].markdown("**Open Bal**")
 
-            # 2. Input Rows
-            for i in range(start_idx, end_idx + 1):
-                if i in default_overrides:
-                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off, d_ord, d_hld = default_overrides[i]
-                else:
-                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off, d_ord, d_hld = False, 100.0, 10.0, 2.0, 5, 20.0, 50.0, 0, 500.0, 20.0
-                
-                # Opening balance logic defaults to 1.25 * trigger point
-                d_inv = d_p1 * 1.25 
+        cont_defaults = {1: (True, 500.0, 10.0, 2.5, 3, 1000.0, 20.0, 0), 2: (True, 150.0, 25.0, 6.0, 2, 500.0, 15.0, 10)}
+        
+        for i in range(1, 6):
+            if i in cont_defaults:
+                d_inc, d_c, d_d, d_std, d_lt, d_ord, d_hld, d_off = cont_defaults[i]
+            else:
+                d_inc, d_c, d_d, d_std, d_lt, d_ord, d_hld, d_off = False, 100.0, 10.0, 2.0, 5, 500.0, 20.0, 0
+            
+            cols = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.6, 0.8, 0.8, 1])
+            with cols[0]: include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"c_inc_{i}")
+            with cols[1]: cost = st.number_input("Cost", min_value=0.01, value=float(d_c), key=f"c_c_{i}", label_visibility="collapsed")
+            with cols[2]: demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"c_d_{i}", label_visibility="collapsed")
+            with cols[3]: std_dev = st.number_input("Std Dev", min_value=0.0, value=float(d_std), key=f"c_std_{i}", label_visibility="collapsed")
+            with cols[4]: lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"c_lt_{i}", label_visibility="collapsed")
+            with cols[5]: ord_cost = st.number_input("Order", min_value=0.0, value=float(d_ord), key=f"c_ord_{i}", label_visibility="collapsed")
+            with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"c_hld_{i}", label_visibility="collapsed")
+            with cols[7]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"c_off_{i}", label_visibility="collapsed")
+            
+            # Mechanical Calculations for Continuous
+            s_calc = (demand * lt) + (Z_score * std_dev * np.sqrt(lt))
+            hld_cost_annual = cost * (hld_pct / 100.0)
+            Q_calc = np.sqrt((2 * demand * 365 * ord_cost) / hld_cost_annual) if hld_cost_annual > 0 else 0
+            open_bal = s_calc * 1.25
 
-                cols = st.columns([1, 0.8, 0.8, 0.8, 0.7, 1, 0.9, 0.9, 0.8, 0.8, 0.8])
-                
-                with cols[0]:
-                    include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"inc_{i}")
-                with cols[1]:
-                    cost = st.number_input("Cost", min_value=0.0, value=float(d_c), key=f"c_{i}", label_visibility="collapsed")
-                with cols[2]:
-                    demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"d_{i}", label_visibility="collapsed")
-                with cols[3]:
-                    std_dev = st.number_input("Std Dev", min_value=0.0, value=float(d_std), key=f"std_{i}", label_visibility="collapsed")
-                with cols[4]:
-                    lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"lt_{i}", label_visibility="collapsed")
-                with cols[5]:
-                    init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}", label_visibility="collapsed")
-                with cols[6]:
-                    p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}", label_visibility="collapsed")
-                with cols[7]:
-                    p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}", label_visibility="collapsed")
-                with cols[8]:
-                    offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}", label_visibility="collapsed")
-                with cols[9]:
-                    ord_cost = st.number_input("Order Cost", min_value=0.0, value=float(d_ord), key=f"ord_{i}", label_visibility="collapsed")
-                with cols[10]:
-                    hld_pct = st.number_input("Hold %", min_value=0.0, value=float(d_hld), key=f"hld_{i}", label_visibility="collapsed")
+            with cols[8]: st.number_input("s", value=float(s_calc), disabled=True, key=f"c_s_{i}", label_visibility="collapsed")
+            with cols[9]: st.number_input("Q", value=float(Q_calc), disabled=True, key=f"c_q_{i}", label_visibility="collapsed")
+            with cols[10]: st.number_input("Open", value=float(open_bal), disabled=True, key=f"c_op_{i}", label_visibility="collapsed")
 
-                if include:
-                    sku_data_list.append({
-                        "SKU": f"SKU-{i:02d}",
-                        "Unit Cost (₹)": cost,
-                        "Daily Demand": demand,
-                        "Std Dev": std_dev,
-                        "Lead Time (Days)": lt,
-                        "Initial Inventory": init_inv,
-                        "Policy Type": policy_type,
-                        "Param 1 (s or R)": p1,
-                        "Param 2 (Q or S)": p2,
-                        "Start Offset (Days)": offset,
-                        "Order Cost (₹)": ord_cost,
-                        "Holding Cost (%)": hld_pct
-                    })
+            if include:
+                sku_data_list.append({
+                    "SKU": f"SKU-{i:02d}", "Unit Cost (₹)": cost, "Daily Demand": demand, "Std Dev": std_dev,
+                    "Lead Time (Days)": lt, "Initial Inventory": open_bal, "Policy Type": "Continuous (s, Q)",
+                    "Param 1 (s or R)": s_calc, "Param 2 (Q or S)": Q_calc, "Start Offset (Days)": offset,
+                    "Order Cost (₹)": ord_cost, "Holding Cost (%)": hld_pct
+                })
 
-    # Continuous Defaults (Added default order/holding costs)
-    cont_defaults = {
-        1: (True, 500.0, 10.0, 2.5, 3, 30.0, 100.0, 0, 1000.0, 20.0),
-        2: (True, 150.0, 25.0, 6.0, 2, 60.0, 200.0, 10, 500.0, 15.0)
-    }
-    render_policy_section("🔄 Continuous Review (s, Q) - SKUs 01 to 05", "Continuous (s, Q)", 1, 5, "Reorder Pt (s)", "Order Qty (Q)", cont_defaults)
+    # 1B. Periodic Review Section
+    with st.expander("📅 Periodic Review (R, S) - SKUs 06 to 10", expanded=True):
+        # 11 Columns for Periodic (Replaced Q with R(Days), and s with S)
+        hp = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.7, 0.6, 0.9, 1])
+        hp[0].markdown("**SKU**")
+        hp[1].markdown("**Cost**")
+        hp[2].markdown("**Dmd**")
+        hp[3].markdown("**Std**")
+        hp[4].markdown("**LT**")
+        hp[5].markdown("**Ord(₹)**")
+        hp[6].markdown("**Hld%**")
+        hp[7].markdown("**R(Days)**")
+        hp[8].markdown("**Off**")
+        hp[9].markdown("**S** (Calc)")
+        hp[10].markdown("**Open Bal**")
 
-    # Periodic Defaults (Added default order/holding costs)
-    per_defaults = {
-        6: (True, 1200.0, 5.0, 1.5, 5, 7.0, 60.0, 5, 2000.0, 25.0)
-    }
-    render_policy_section("📅 Periodic Review (R, S) - SKUs 06 to 10", "Periodic (R, S)", 6, 10, "Review (R) Days", "Up-To Lvl (S)", per_defaults)
+        per_defaults = {6: (True, 1200.0, 5.0, 1.5, 5, 2000.0, 25.0, 7, 5)}
+        
+        for i in range(6, 11):
+            if i in per_defaults:
+                d_inc, d_c, d_d, d_std, d_lt, d_ord, d_hld, d_r, d_off = per_defaults[i]
+            else:
+                d_inc, d_c, d_d, d_std, d_lt, d_ord, d_hld, d_r, d_off = False, 100.0, 10.0, 2.0, 5, 500.0, 20.0, 7, 0
+            
+            cols = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.7, 0.6, 0.9, 1])
+            with cols[0]: include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"p_inc_{i}")
+            with cols[1]: cost = st.number_input("Cost", min_value=0.01, value=float(d_c), key=f"p_c_{i}", label_visibility="collapsed")
+            with cols[2]: demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"p_d_{i}", label_visibility="collapsed")
+            with cols[3]: std_dev = st.number_input("Std Dev", min_value=0.0, value=float(d_std), key=f"p_std_{i}", label_visibility="collapsed")
+            with cols[4]: lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"p_lt_{i}", label_visibility="collapsed")
+            with cols[5]: ord_cost = st.number_input("Order", min_value=0.0, value=float(d_ord), key=f"p_ord_{i}", label_visibility="collapsed")
+            with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"p_hld_{i}", label_visibility="collapsed")
+            with cols[7]: R_days = st.number_input("R", min_value=1, value=int(d_r), key=f"p_r_{i}", label_visibility="collapsed")
+            with cols[8]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"p_off_{i}", label_visibility="collapsed")
+            
+            # Mechanical Calculations for Periodic
+            exposure_period = lt + R_days
+            S_calc = (demand * exposure_period) + (Z_score * std_dev * np.sqrt(exposure_period))
+            open_bal = S_calc # Starting right at target level
+
+            with cols[9]: st.number_input("S", value=float(S_calc), disabled=True, key=f"p_s_{i}", label_visibility="collapsed")
+            with cols[10]: st.number_input("Open", value=float(open_bal), disabled=True, key=f"p_op_{i}", label_visibility="collapsed")
+
+            if include:
+                sku_data_list.append({
+                    "SKU": f"SKU-{i:02d}", "Unit Cost (₹)": cost, "Daily Demand": demand, "Std Dev": std_dev,
+                    "Lead Time (Days)": lt, "Initial Inventory": open_bal, "Policy Type": "Periodic (R, S)",
+                    "Param 1 (s or R)": R_days, "Param 2 (Q or S)": S_calc, "Start Offset (Days)": offset,
+                    "Order Cost (₹)": ord_cost, "Holding Cost (%)": hld_pct
+                })
 
     active_df = pd.DataFrame(sku_data_list)
 
+    # 2. Vectorized Stochastic Simulation Engine
     @st.cache_data 
     def run_vectorized_simulation(df, days):
         N = len(df)
@@ -2322,7 +2366,6 @@ with tab6:
 
         avg_inv = history.mean(axis=1)
         
-        # Calculate mechanical OPEX
         total_order_costs = orders_placed_count * ord_costs_arr
         total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (days / 365.0)
         total_opex = total_order_costs + total_holding_costs
@@ -2337,7 +2380,6 @@ with tab6:
             "Total OPEX (₹)": total_opex
         })
         
-        # Prepare data for stacked cost breakdown chart
         cost_breakdown = pd.DataFrame({
             "SKU": df["SKU"].tolist() * 2,
             "Cost Type": ["Ordering Cost"] * N + ["Holding Cost"] * N,
@@ -2346,12 +2388,12 @@ with tab6:
 
         return history_df, metrics_df, capital_df, cost_breakdown
 
+    # 3. Output Displays
     if not active_df.empty:
         history_df, metrics_df, capital_df, cost_breakdown = run_vectorized_simulation(active_df, horizon)
 
         st.markdown("### 2. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
-        
         inv_chart = alt.Chart(inv_melt).mark_line().encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
