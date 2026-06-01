@@ -2165,55 +2165,66 @@ with tab5:
 
 
 #Multi SKU Simulation
-# Ensure this is placed under your tab definition, e.g.,
-# tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([...])
-
 with tab6:
     st.header("Multi-SKU Dynamic Inventory Simulator")
 
-    # 1. Initialize Default Data in Session State
-    if "sim_df" not in st.session_state:
-        st.session_state.sim_df = pd.DataFrame({
-            "SKU": ["SKU-A", "SKU-B", "SKU-C"],
-            "Unit Cost (₹)": [500.0, 1200.0, 150.0],
-            "Daily Demand": [10, 5, 25],
-            "Lead Time (Days)": [3, 5, 2],
-            "Initial Inventory": [100, 50, 200],
-            "Policy Type": ["Continuous (s, Q)", "Periodic (R, S)", "Continuous (s, Q)"],
-            "Param 1 (s or R)": [30, 7, 60],  
-            "Param 2 (Q or S)": [100, 60, 200], 
-            "Start Offset (Days)": [0, 5, 10]   
-        })
-
-    st.markdown("### 1. Define SKU Policies")
-    st.caption("Param 1 is Reorder Point (s) or Review Period (R). Param 2 is Order Qty (Q) or Up-To Level (S).")
-
-    # 2. Editable Data Grid with Dropdowns
-    edited_df = st.data_editor(
-        st.session_state.sim_df,
-        column_config={
-            "Policy Type": st.column_config.SelectboxColumn(
-                "Policy Type",
-                help="Select the inventory control policy",
-                options=["Continuous (s, Q)", "Periodic (R, S)"],
-                required=True
-            )
-        },
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True
-    )
-
     horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
 
-    # 3. Vectorized Simulation Engine
+    st.markdown("### 1. Define SKU Policies")
+    
+    sku_data_list = []
+    
+    # Pre-defined default data for the first 3 SKUs 
+    defaults = [
+        (500.0, 10.0, 3, 100.0, 0, 30.0, 100.0, 0),  # SKU-01
+        (1200.0, 5.0, 5, 50.0, 1, 7.0, 60.0, 5),     # SKU-02
+        (150.0, 25.0, 2, 200.0, 0, 60.0, 200.0, 10)  # SKU-03
+    ]
+    
+    # Generate 10 SKU input blocks
+    for i in range(1, 11):
+        is_default_active = i <= 3
+        
+        # Unpack defaults if available, otherwise apply generic zeroes
+        d_c, d_d, d_lt, d_inv, d_pol_idx, d_p1, d_p2, d_off = defaults[i-1] if is_default_active else (100.0, 10.0, 5, 50.0, 0, 20.0, 50.0, 0)
+        
+        with st.expander(f"📦 SKU-{i:02d} Configuration", expanded=is_default_active):
+            include = st.checkbox(f"Include SKU-{i:02d} in Simulation", value=is_default_active, key=f"inc_{i}")
+            
+            if include:
+                col1, col2, col3, col4 = st.columns(4)
+                cost = col1.number_input("Unit Cost (₹)", min_value=0.0, value=float(d_c), key=f"c_{i}")
+                demand = col2.number_input("Daily Demand", min_value=0.0, value=float(d_d), key=f"d_{i}")
+                lt = col3.number_input("Lead Time (Days)", min_value=0, value=int(d_lt), key=f"lt_{i}")
+                init_inv = col4.number_input("Initial Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}")
+                
+                col5, col6, col7, col8 = st.columns(4)
+                pol = col5.selectbox("Policy Type", ["Continuous (s, Q)", "Periodic (R, S)"], index=d_pol_idx, key=f"pol_{i}")
+                p1 = col6.number_input("Param 1 (s or R)", min_value=0.0, value=float(d_p1), key=f"p1_{i}")
+                p2 = col7.number_input("Param 2 (Q or S)", min_value=0.0, value=float(d_p2), key=f"p2_{i}")
+                offset = col8.number_input("Start Offset (Days)", min_value=0, value=int(d_off), key=f"off_{i}")
+                
+                sku_data_list.append({
+                    "SKU": f"SKU-{i:02d}",
+                    "Unit Cost (₹)": cost,
+                    "Daily Demand": demand,
+                    "Lead Time (Days)": lt,
+                    "Initial Inventory": init_inv,
+                    "Policy Type": pol,
+                    "Param 1 (s or R)": p1,
+                    "Param 2 (Q or S)": p2,
+                    "Start Offset (Days)": offset
+                })
+
+    active_df = pd.DataFrame(sku_data_list)
+
+    # 2. Vectorized Simulation Engine
     @st.cache_data 
     def run_vectorized_simulation(df, days):
         N = len(df)
         if N == 0:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-        # Extract to fast NumPy arrays and cast types immediately to prevent UFuncOutputCastingError
         initial_inv = df["Initial Inventory"].values.astype(float)
         demand = df["Daily Demand"].values.astype(float)
         lt = df["Lead Time (Days)"].values.astype(int) 
@@ -2225,41 +2236,30 @@ with tab6:
         p1 = df["Param 1 (s or R)"].values.astype(float)
         p2 = df["Param 2 (Q or S)"].values.astype(float)
 
-        # State tracking matrices - explicitly cast to float
         on_hand = initial_inv.copy().astype(float)
-        
-        # Arrivals matrix: rows are SKUs, columns are specific days future orders arrive
         max_lt = 0 if len(lt) == 0 else np.max(lt)
         arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
         history = np.zeros((N, days), dtype=float)
 
         for t in range(days):
-            # 1. Receive orders arriving today
             on_hand += arrivals[:, t]
 
-            # 2. Fulfill demand (Boolean mask: only apply demand if past start offset)
             active = t >= offset
             on_hand -= demand * active
 
-            # 3. Calculate Inventory Position (On-hand + Pipeline)
             pipeline = np.sum(arrivals[:, t+1:], axis=1)
             inv_position = on_hand + pipeline
 
-            # 4. Check Continuous Policy triggers (s, Q)
             trigger_cont = active & is_cont & (inv_position <= p1)
 
-            # 5. Check Periodic Policy triggers (R, S)
-            # Avoid modulo by zero if R (p1) is accidentally set to 0
             R_safe = np.where(p1 > 0, p1, 1).astype(int)
             is_review_day = (t - offset) % R_safe == 0
             trigger_per = active & is_periodic & is_review_day & (inv_position < p2)
 
-            # 6. Calculate Order Quantities
             order_qty = np.zeros(N, dtype=float)
             order_qty[trigger_cont] = p2[trigger_cont]
             order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
 
-            # 7. Place Orders into the arrival matrix
             valid_orders = order_qty > 0
             if np.any(valid_orders):
                 skus_to_order = np.where(valid_orders)[0]
@@ -2268,14 +2268,15 @@ with tab6:
                     if arrival_day < arrivals.shape[1]:
                         arrivals[i, arrival_day] += order_qty[i]
 
-            # Record closing inventory for the day
             history[:, t] = on_hand
 
-        # Compile Results
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        # Calculate Metrics (Floor at 0 to only average physical stock, treating negative as backorders)
+        # Calculate Working Capital across time (only evaluating physical stock > 0)
         physical_history = np.maximum(0, history)
+        daily_capital = np.sum(physical_history * costs[:, np.newaxis], axis=0)
+        capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
+
         avg_inv = physical_history.mean(axis=1)
         
         metrics_df = pd.DataFrame({
@@ -2284,17 +2285,36 @@ with tab6:
             "Avg Capital Tied Up (₹)": avg_inv * costs
         })
 
-        return history_df, metrics_df
+        return history_df, metrics_df, capital_df
 
-    # 4. Run and Display
-    history_df, metrics_df = run_vectorized_simulation(edited_df, horizon)
+    # 3. Run and Display
+    if not active_df.empty:
+        history_df, metrics_df, capital_df = run_vectorized_simulation(active_df, horizon)
 
-    if not history_df.empty:
         st.markdown("### 2. Projected On-Hand Inventory")
-        # Streamlit's native line chart will automatically apply your app's primary theme color
-        st.line_chart(history_df)
+        
+        # Melt data for Altair grouping
+        inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
+        
+        # Clean, minimal blue-themed chart
+        inv_chart = alt.Chart(inv_melt).mark_line().encode(
+            x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
+            y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
+            color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
+        ).properties(height=350).configure_view(strokeWidth=0)
+        
+        st.altair_chart(inv_chart, use_container_width=True, theme=None)
 
-        st.markdown("### 3. Financial Impact")
+        st.markdown("### 3. Total Working Capital Movement")
+        
+        cap_chart = alt.Chart(capital_df.reset_index().rename(columns={"index": "Day"})).mark_line(color="#005b96", strokeWidth=2).encode(
+            x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
+            y=alt.Y("Total Working Capital (₹):Q", title="Capital Tied Up (₹)", axis=alt.Axis(gridColor="#f0f0f0"))
+        ).properties(height=300).configure_view(strokeWidth=0)
+        
+        st.altair_chart(cap_chart, use_container_width=True, theme=None)
+
+        st.markdown("### 4. Financial Impact Summary")
         st.dataframe(
             metrics_df.style.format({
                 "Avg Physical Inventory": "{:,.1f}", 
@@ -2305,6 +2325,6 @@ with tab6:
         )
 
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
-        
-        # Display absolute total value
-        st.metric("Total Average Capital Tied Up", f"₹{total_capital:,.2f}")
+        st.metric("Aggregate Average Capital Tied Up", f"₹{total_capital:,.2f}")
+    else:
+        st.info("Please include at least one SKU to run the simulation.")
