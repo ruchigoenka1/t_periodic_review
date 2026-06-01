@@ -2177,7 +2177,7 @@ with tab6:
     # Helper function to render a clean, table-like UI using columns
     def render_policy_section(title, policy_type, start_idx, end_idx, p1_label, p2_label, default_overrides):
         with st.expander(title, expanded=True):
-            # 1. Header Row (Updated with 9 columns to fit Std Dev)
+            # 1. Header Row
             hc = st.columns([1.1, 0.9, 0.9, 0.9, 0.8, 1.1, 1, 1, 1])
             hc[0].markdown("**SKU**")
             hc[1].markdown("**Cost (₹)**")
@@ -2236,14 +2236,14 @@ with tab6:
                         "Start Offset (Days)": offset
                     })
 
-    # Continuous Defaults (Added standard deviation defaults)
+    # Continuous Defaults
     cont_defaults = {
         1: (True, 500.0, 10.0, 2.5, 3, 30.0, 100.0, 0),
         2: (True, 150.0, 25.0, 6.0, 2, 60.0, 200.0, 10)
     }
     render_policy_section("🔄 Continuous Review (s, Q) - SKUs 01 to 05", "Continuous (s, Q)", 1, 5, "Reorder Pt (s)", "Order Qty (Q)", cont_defaults)
 
-    # Periodic Defaults (Added standard deviation defaults)
+    # Periodic Defaults
     per_defaults = {
         6: (True, 1200.0, 5.0, 1.5, 5, 7.0, 60.0, 5)
     }
@@ -2258,6 +2258,7 @@ with tab6:
         if N == 0:
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+        # Extract to fast NumPy arrays and cast types immediately
         initial_inv = df["Initial Inventory"].values.astype(float)
         mean_demand = df["Daily Demand"].values.astype(float)
         std_dev = df["Std Dev"].values.astype(float)
@@ -2272,31 +2273,40 @@ with tab6:
 
         on_hand = initial_inv.copy().astype(float)
         max_lt = 0 if len(lt) == 0 else np.max(lt)
+        
+        # Arrivals matrix: rows are SKUs, columns are days future orders arrive
         arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
         history = np.zeros((N, days), dtype=float)
 
         for t in range(days):
+            # 1. Receive orders arriving today
             on_hand += arrivals[:, t]
 
+            # 2. Fulfill demand
             active = t >= offset
-            
-            # Generate stochastic demand using normal distribution, floored at 0
             stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev))
             on_hand -= stochastic_demand * active
+            
+            # 3. Floor inventory at 0 to prevent negative balances (Lost Sales Logic)
+            on_hand = np.maximum(0, on_hand)
 
+            # 4. Calculate Inventory Position (On-hand + Pipeline)
             pipeline = np.sum(arrivals[:, t+1:], axis=1)
             inv_position = on_hand + pipeline
 
+            # 5. Check Triggers
             trigger_cont = active & is_cont & (inv_position <= p1)
 
             R_safe = np.where(p1 > 0, p1, 1).astype(int)
             is_review_day = (t - offset) % R_safe == 0
             trigger_per = active & is_periodic & is_review_day & (inv_position < p2)
 
+            # 6. Calculate Order Quantities
             order_qty = np.zeros(N, dtype=float)
             order_qty[trigger_cont] = p2[trigger_cont]
             order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
 
+            # 7. Place Orders into the arrival matrix
             valid_orders = order_qty > 0
             if np.any(valid_orders):
                 skus_to_order = np.where(valid_orders)[0]
@@ -2305,16 +2315,17 @@ with tab6:
                     if arrival_day < arrivals.shape[1]:
                         arrivals[i, arrival_day] += order_qty[i]
 
+            # Record closing inventory for the day
             history[:, t] = on_hand
 
+        # Compile Results
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        # Calculate Working Capital across time (evaluating physical stock > 0)
-        physical_history = np.maximum(0, history)
-        daily_capital = np.sum(physical_history * costs[:, np.newaxis], axis=0)
+        # Calculate Working Capital across time
+        daily_capital = np.sum(history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
-        avg_inv = physical_history.mean(axis=1)
+        avg_inv = history.mean(axis=1)
         
         metrics_df = pd.DataFrame({
             "SKU": df["SKU"],
