@@ -2193,17 +2193,25 @@ with tab6:
             include = st.checkbox(f"Include SKU-{i:02d} in Simulation", value=is_default_active, key=f"inc_{i}")
             
             if include:
-                col1, col2, col3, col4 = st.columns(4)
-                cost = col1.number_input("Unit Cost (₹)", min_value=0.0, value=float(d_c), key=f"c_{i}")
-                demand = col2.number_input("Daily Demand", min_value=0.0, value=float(d_d), key=f"d_{i}")
-                lt = col3.number_input("Lead Time (Days)", min_value=0, value=int(d_lt), key=f"lt_{i}")
-                init_inv = col4.number_input("Initial Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}")
+                # Create 8 columns to fit all inputs on a single line
+                # Giving the Policy selectbox slightly more width (1.5) so the text fits
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1.5, 1, 1, 1])
                 
-                col5, col6, col7, col8 = st.columns(4)
-                pol = col5.selectbox("Policy Type", ["Continuous (s, Q)", "Periodic (R, S)"], index=d_pol_idx, key=f"pol_{i}")
-                p1 = col6.number_input("Param 1 (s or R)", min_value=0.0, value=float(d_p1), key=f"p1_{i}")
-                p2 = col7.number_input("Param 2 (Q or S)", min_value=0.0, value=float(d_p2), key=f"p2_{i}")
-                offset = col8.number_input("Start Offset (Days)", min_value=0, value=int(d_off), key=f"off_{i}")
+                # We define the selectbox first so we can use its value to dynamically change the other labels
+                with c5: 
+                    pol = st.selectbox("Policy", ["Continuous (s, Q)", "Periodic (R, S)"], index=d_pol_idx, key=f"pol_{i}")
+                
+                # Dynamic Labels based on policy choice
+                p1_label = "Reorder Pt (s)" if pol == "Continuous (s, Q)" else "Review (R) Days"
+                p2_label = "Order Qty (Q)" if pol == "Continuous (s, Q)" else "Up-To Lvl (S)"
+                
+                with c1: cost = st.number_input("Cost (₹)", min_value=0.0, value=float(d_c), key=f"c_{i}")
+                with c2: demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"d_{i}")
+                with c3: lt = st.number_input("LT (Days)", min_value=0, value=int(d_lt), key=f"lt_{i}")
+                with c4: init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}")
+                with c6: p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}")
+                with c7: p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}")
+                with c8: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}")
                 
                 sku_data_list.append({
                     "SKU": f"SKU-{i:02d}",
