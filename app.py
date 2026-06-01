@@ -2174,33 +2174,33 @@ with tab6:
     
     sku_data_list = []
 
-    # Helper function to render a clean, table-like UI using columns
     def render_policy_section(title, policy_type, start_idx, end_idx, p1_label, p2_label, default_overrides):
         with st.expander(title, expanded=True):
-            # 1. Header Row
-            hc = st.columns([1.1, 0.9, 0.9, 0.9, 0.8, 1.1, 1, 1, 1])
+            # 1. Header Row (Expanded to 11 tight columns)
+            hc = st.columns([1, 0.8, 0.8, 0.8, 0.7, 1, 0.9, 0.9, 0.8, 0.8, 0.8])
             hc[0].markdown("**SKU**")
-            hc[1].markdown("**Cost (₹)**")
-            hc[2].markdown("**Demand**")
-            hc[3].markdown("**Std Dev**")
+            hc[1].markdown("**Cost**")
+            hc[2].markdown("**Dmd**")
+            hc[3].markdown("**Std**")
             hc[4].markdown("**LT**")
             hc[5].markdown("**Init Inv**")
             hc[6].markdown(f"**{p1_label}**")
             hc[7].markdown(f"**{p2_label}**")
-            hc[8].markdown("**Offset**")
+            hc[8].markdown("**Off**")
+            hc[9].markdown("**Ord(₹)**")
+            hc[10].markdown("**Hld(%)**")
 
             # 2. Input Rows
             for i in range(start_idx, end_idx + 1):
-                # Unpack defaults if provided, otherwise set generics
                 if i in default_overrides:
-                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off = default_overrides[i]
+                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off, d_ord, d_hld = default_overrides[i]
                 else:
-                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off = False, 100.0, 10.0, 2.0, 5, 20.0, 50.0, 0
+                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off, d_ord, d_hld = False, 100.0, 10.0, 2.0, 5, 20.0, 50.0, 0, 500.0, 20.0
                 
                 # Opening balance logic defaults to 1.25 * trigger point
                 d_inv = d_p1 * 1.25 
 
-                cols = st.columns([1.1, 0.9, 0.9, 0.9, 0.8, 1.1, 1, 1, 1])
+                cols = st.columns([1, 0.8, 0.8, 0.8, 0.7, 1, 0.9, 0.9, 0.8, 0.8, 0.8])
                 
                 with cols[0]:
                     include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"inc_{i}")
@@ -2220,8 +2220,11 @@ with tab6:
                     p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}", label_visibility="collapsed")
                 with cols[8]:
                     offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}", label_visibility="collapsed")
+                with cols[9]:
+                    ord_cost = st.number_input("Order Cost", min_value=0.0, value=float(d_ord), key=f"ord_{i}", label_visibility="collapsed")
+                with cols[10]:
+                    hld_pct = st.number_input("Hold %", min_value=0.0, value=float(d_hld), key=f"hld_{i}", label_visibility="collapsed")
 
-                # Only add to simulation if the checkbox is ticked
                 if include:
                     sku_data_list.append({
                         "SKU": f"SKU-{i:02d}",
@@ -2233,38 +2236,40 @@ with tab6:
                         "Policy Type": policy_type,
                         "Param 1 (s or R)": p1,
                         "Param 2 (Q or S)": p2,
-                        "Start Offset (Days)": offset
+                        "Start Offset (Days)": offset,
+                        "Order Cost (₹)": ord_cost,
+                        "Holding Cost (%)": hld_pct
                     })
 
-    # Continuous Defaults
+    # Continuous Defaults (Added default order/holding costs)
     cont_defaults = {
-        1: (True, 500.0, 10.0, 2.5, 3, 30.0, 100.0, 0),
-        2: (True, 150.0, 25.0, 6.0, 2, 60.0, 200.0, 10)
+        1: (True, 500.0, 10.0, 2.5, 3, 30.0, 100.0, 0, 1000.0, 20.0),
+        2: (True, 150.0, 25.0, 6.0, 2, 60.0, 200.0, 10, 500.0, 15.0)
     }
     render_policy_section("🔄 Continuous Review (s, Q) - SKUs 01 to 05", "Continuous (s, Q)", 1, 5, "Reorder Pt (s)", "Order Qty (Q)", cont_defaults)
 
-    # Periodic Defaults
+    # Periodic Defaults (Added default order/holding costs)
     per_defaults = {
-        6: (True, 1200.0, 5.0, 1.5, 5, 7.0, 60.0, 5)
+        6: (True, 1200.0, 5.0, 1.5, 5, 7.0, 60.0, 5, 2000.0, 25.0)
     }
     render_policy_section("📅 Periodic Review (R, S) - SKUs 06 to 10", "Periodic (R, S)", 6, 10, "Review (R) Days", "Up-To Lvl (S)", per_defaults)
 
     active_df = pd.DataFrame(sku_data_list)
 
-    # 2. Vectorized Stochastic Simulation Engine
     @st.cache_data 
     def run_vectorized_simulation(df, days):
         N = len(df)
         if N == 0:
-            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-        # Extract to fast NumPy arrays and cast types immediately
         initial_inv = df["Initial Inventory"].values.astype(float)
         mean_demand = df["Daily Demand"].values.astype(float)
         std_dev = df["Std Dev"].values.astype(float)
         lt = df["Lead Time (Days)"].values.astype(int) 
         offset = df["Start Offset (Days)"].values.astype(int) 
         costs = df["Unit Cost (₹)"].values.astype(float)
+        ord_costs_arr = df["Order Cost (₹)"].values.astype(float)
+        hld_pct_arr = df["Holding Cost (%)"].values.astype(float)
         
         is_cont = (df["Policy Type"] == "Continuous (s, Q)").values
         is_periodic = (df["Policy Type"] == "Periodic (R, S)").values
@@ -2274,40 +2279,33 @@ with tab6:
         on_hand = initial_inv.copy().astype(float)
         max_lt = 0 if len(lt) == 0 else np.max(lt)
         
-        # Arrivals matrix: rows are SKUs, columns are days future orders arrive
         arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
         history = np.zeros((N, days), dtype=float)
+        orders_placed_count = np.zeros(N, dtype=int)
 
         for t in range(days):
-            # 1. Receive orders arriving today
             on_hand += arrivals[:, t]
 
-            # 2. Fulfill demand
             active = t >= offset
             stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev))
             on_hand -= stochastic_demand * active
-            
-            # 3. Floor inventory at 0 to prevent negative balances (Lost Sales Logic)
             on_hand = np.maximum(0, on_hand)
 
-            # 4. Calculate Inventory Position (On-hand + Pipeline)
             pipeline = np.sum(arrivals[:, t+1:], axis=1)
             inv_position = on_hand + pipeline
 
-            # 5. Check Triggers
             trigger_cont = active & is_cont & (inv_position <= p1)
-
             R_safe = np.where(p1 > 0, p1, 1).astype(int)
             is_review_day = (t - offset) % R_safe == 0
             trigger_per = active & is_periodic & is_review_day & (inv_position < p2)
 
-            # 6. Calculate Order Quantities
             order_qty = np.zeros(N, dtype=float)
             order_qty[trigger_cont] = p2[trigger_cont]
             order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
 
-            # 7. Place Orders into the arrival matrix
             valid_orders = order_qty > 0
+            orders_placed_count += valid_orders.astype(int)
+
             if np.any(valid_orders):
                 skus_to_order = np.where(valid_orders)[0]
                 for i in skus_to_order:
@@ -2315,29 +2313,41 @@ with tab6:
                     if arrival_day < arrivals.shape[1]:
                         arrivals[i, arrival_day] += order_qty[i]
 
-            # Record closing inventory for the day
             history[:, t] = on_hand
 
-        # Compile Results
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        # Calculate Working Capital across time
         daily_capital = np.sum(history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
         avg_inv = history.mean(axis=1)
         
+        # Calculate mechanical OPEX
+        total_order_costs = orders_placed_count * ord_costs_arr
+        total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (days / 365.0)
+        total_opex = total_order_costs + total_holding_costs
+
         metrics_df = pd.DataFrame({
             "SKU": df["SKU"],
             "Avg Physical Inventory": avg_inv,
-            "Avg Capital Tied Up (₹)": avg_inv * costs
+            "Avg Capital Tied Up (₹)": avg_inv * costs,
+            "Total Orders": orders_placed_count,
+            "Ordering Cost (₹)": total_order_costs,
+            "Holding Cost (₹)": total_holding_costs,
+            "Total OPEX (₹)": total_opex
+        })
+        
+        # Prepare data for stacked cost breakdown chart
+        cost_breakdown = pd.DataFrame({
+            "SKU": df["SKU"].tolist() * 2,
+            "Cost Type": ["Ordering Cost"] * N + ["Holding Cost"] * N,
+            "Cost (₹)": total_order_costs.tolist() + total_holding_costs.tolist()
         })
 
-        return history_df, metrics_df, capital_df
+        return history_df, metrics_df, capital_df, cost_breakdown
 
-    # 3. Run and Display
     if not active_df.empty:
-        history_df, metrics_df, capital_df = run_vectorized_simulation(active_df, horizon)
+        history_df, metrics_df, capital_df, cost_breakdown = run_vectorized_simulation(active_df, horizon)
 
         st.markdown("### 2. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
@@ -2347,28 +2357,41 @@ with tab6:
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
             color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
         ).properties(height=350).configure_view(strokeWidth=0)
-        
         st.altair_chart(inv_chart, use_container_width=True, theme=None)
+        
+        st.markdown("### 3. Cost Tradeoff Analysis (OPEX)")
+        cost_chart = alt.Chart(cost_breakdown).mark_bar().encode(
+            x=alt.X("SKU:N", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Cost (₹):Q", title="Total OPEX (₹)", axis=alt.Axis(gridColor="#f0f0f0")),
+            color=alt.Color("Cost Type:N", scale=alt.Scale(range=["#005b96", "#b3cde0"]))
+        ).properties(height=350).configure_view(strokeWidth=0)
+        st.altair_chart(cost_chart, use_container_width=True, theme=None)
 
-        st.markdown("### 3. Total Working Capital Movement")
+        st.markdown("### 4. Total Working Capital Movement")
         cap_chart = alt.Chart(capital_df.reset_index().rename(columns={"index": "Day"})).mark_line(color="#005b96", strokeWidth=2).encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Total Working Capital (₹):Q", title="Capital Tied Up (₹)", axis=alt.Axis(gridColor="#f0f0f0"))
         ).properties(height=300).configure_view(strokeWidth=0)
-        
         st.altair_chart(cap_chart, use_container_width=True, theme=None)
 
-        st.markdown("### 4. Financial Impact Summary")
+        st.markdown("### 5. Financial Impact Summary")
         st.dataframe(
             metrics_df.style.format({
                 "Avg Physical Inventory": "{:,.1f}", 
-                "Avg Capital Tied Up (₹)": "₹{:,.2f}"
+                "Avg Capital Tied Up (₹)": "₹{:,.2f}",
+                "Ordering Cost (₹)": "₹{:,.2f}",
+                "Holding Cost (₹)": "₹{:,.2f}",
+                "Total OPEX (₹)": "₹{:,.2f}"
             }), 
             use_container_width=True, 
             hide_index=True
         )
 
+        col1, col2 = st.columns(2)
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
-        st.metric("Aggregate Average Capital Tied Up", f"₹{total_capital:,.2f}")
+        total_opex_all = metrics_df["Total OPEX (₹)"].sum()
+        
+        col1.metric("Aggregate Average Capital Tied Up", f"₹{total_capital:,.2f}")
+        col2.metric(f"Total Portfolio OPEX ({horizon} Days)", f"₹{total_opex_all:,.2f}")
     else:
         st.info("Please include at least one SKU to run the simulation.")
