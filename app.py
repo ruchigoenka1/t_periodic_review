@@ -20,7 +20,7 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
@@ -2161,4 +2161,145 @@ with tab5:
                                 height=450, legend=dict(orientation="h", y=1.1, x=1, xanchor="right")
                             )
                             st.plotly_chart(comp_fig, use_container_width=True)
-                    
+
+
+
+#Multi SKU Simulation
+with tab6:
+    st.header("Multi-SKU Dynamic Inventory Simulator")
+
+    # 1. Initialize Default Data in Session State
+    if "sim_df" not in st.session_state:
+        st.session_state.sim_df = pd.DataFrame({
+            "SKU": ["SKU-A", "SKU-B", "SKU-C"],
+            "Unit Cost (₹)": [500.0, 1200.0, 150.0],
+            "Daily Demand": [10, 5, 25],
+            "Lead Time (Days)": [3, 5, 2],
+            "Initial Inventory": [100, 50, 200],
+            "Policy Type": ["Continuous (s, Q)", "Periodic (R, S)", "Continuous (s, Q)"],
+            "Param 1 (s or R)": [30, 7, 60],  
+            "Param 2 (Q or S)": [100, 60, 200], 
+            "Start Offset (Days)": [0, 5, 10]   
+        })
+
+    st.markdown("### 1. Define SKU Policies")
+    st.caption("Param 1 is Reorder Point (s) or Review Period (R). Param 2 is Order Qty (Q) or Up-To Level (S).")
+
+    # 2. Editable Data Grid with Dropdowns
+    edited_df = st.data_editor(
+        st.session_state.sim_df,
+        column_config={
+            "Policy Type": st.column_config.SelectboxColumn(
+                "Policy Type",
+                help="Select the inventory control policy",
+                options=["Continuous (s, Q)", "Periodic (R, S)"],
+                required=True
+            )
+        },
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True
+    )
+
+    horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
+
+    # 3. Vectorized Simulation Engine
+    @st.cache_data # Cache the results so Streamlit only re-runs when inputs change
+    def run_vectorized_simulation(df, days):
+        N = len(df)
+        if N == 0:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # Extract to fast NumPy arrays
+        initial_inv = df["Initial Inventory"].values
+        demand = df["Daily Demand"].values
+        lt = df["Lead Time (Days)"].values
+        offset = df["Start Offset (Days)"].values
+        costs = df["Unit Cost (₹)"].values
+        
+        is_cont = (df["Policy Type"] == "Continuous (s, Q)").values
+        is_periodic = (df["Policy Type"] == "Periodic (R, S)").values
+        p1 = df["Param 1 (s or R)"].values
+        p2 = df["Param 2 (Q or S)"].values
+
+        # State tracking matrices
+        on_hand = initial_inv.copy()
+        # arrivals matrix: rows are SKUs, columns are specific days future orders arrive
+        arrivals = np.zeros((N, days + np.max(lt) + 1)) 
+        history = np.zeros((N, days))
+
+        for t in range(days):
+            # 1. Receive orders arriving today
+            on_hand += arrivals[:, t]
+
+            # 2. Fulfill demand (Boolean mask: only apply demand if past start offset)
+            active = t >= offset
+            on_hand -= demand * active
+
+            # 3. Calculate Inventory Position (On-hand + Pipeline)
+            pipeline = np.sum(arrivals[:, t+1:], axis=1)
+            inv_position = on_hand + pipeline
+
+            # 4. Check Continuous Policy triggers (s, Q)
+            trigger_cont = active & is_cont & (inv_position <= p1)
+
+            # 5. Check Periodic Policy triggers (R, S)
+            # Avoid modulo by zero if R (p1) is accidentally set to 0
+            R_safe = np.where(p1 > 0, p1, 1) 
+            is_review_day = (t - offset) % R_safe == 0
+            trigger_per = active & is_periodic & is_review_day & (inv_position < p2)
+
+            # 6. Calculate Order Quantities
+            order_qty = np.zeros(N)
+            order_qty[trigger_cont] = p2[trigger_cont]
+            order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
+
+            # 7. Place Orders into the arrival matrix
+            valid_orders = order_qty > 0
+            if np.any(valid_orders):
+                skus_to_order = np.where(valid_orders)[0]
+                for i in skus_to_order:
+                    arrival_day = t + lt[i]
+                    if arrival_day < arrivals.shape[1]:
+                        arrivals[i, arrival_day] += order_qty[i]
+
+            # Record closing inventory for the day
+            history[:, t] = on_hand
+
+        # Compile Results
+        history_df = pd.DataFrame(history.T, columns=df["SKU"])
+        
+        # Calculate Metrics (Floor at 0 to only average physical stock, treating negative as backorders)
+        physical_history = np.maximum(0, history)
+        avg_inv = physical_history.mean(axis=1)
+        
+        metrics_df = pd.DataFrame({
+            "SKU": df["SKU"],
+            "Avg Physical Inventory": avg_inv,
+            "Avg Capital Tied Up (₹)": avg_inv * costs
+        })
+
+        return history_df, metrics_df
+
+    # 4. Run and Display
+    history_df, metrics_df = run_vectorized_simulation(edited_df, horizon)
+
+    if not history_df.empty:
+        st.markdown("### 2. Projected On-Hand Inventory")
+        # Line chart tracks physical behavior over time
+        st.line_chart(history_df)
+
+        st.markdown("### 3. Financial Impact")
+        st.dataframe(
+            metrics_df.style.format({
+                "Avg Physical Inventory": "{:,.1f}", 
+                "Avg Capital Tied Up (₹)": "₹{:,.2f}"
+            }), 
+            use_container_width=True, 
+            hide_index=True
+        )
+
+        total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
+        
+        # Display absolute value summary as requested
+        st.metric("Total Average Capital Tied Up", f"₹{total_capital:,.2f}")
