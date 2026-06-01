@@ -2170,60 +2170,80 @@ with tab6:
     st.header("Multi-SKU Dynamic Inventory Simulator")
 
     horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
-
     st.markdown("### 1. Define SKU Policies")
     
     sku_data_list = []
-    
-    # Pre-defined default data for the first 3 SKUs 
-    defaults = [
-        (500.0, 10.0, 3, 100.0, 0, 30.0, 100.0, 0),  # SKU-01
-        (1200.0, 5.0, 5, 50.0, 1, 7.0, 60.0, 5),     # SKU-02
-        (150.0, 25.0, 2, 200.0, 0, 60.0, 200.0, 10)  # SKU-03
-    ]
-    
-    # Generate 10 SKU input blocks
-    for i in range(1, 11):
-        is_default_active = i <= 3
-        
-        # Unpack defaults if available, otherwise apply generic zeroes
-        d_c, d_d, d_lt, d_inv, d_pol_idx, d_p1, d_p2, d_off = defaults[i-1] if is_default_active else (100.0, 10.0, 5, 50.0, 0, 20.0, 50.0, 0)
-        
-        with st.expander(f"📦 SKU-{i:02d} Configuration", expanded=is_default_active):
-            include = st.checkbox(f"Include SKU-{i:02d} in Simulation", value=is_default_active, key=f"inc_{i}")
-            
-            if include:
-                # Create 8 columns to fit all inputs on a single line
-                # Giving the Policy selectbox slightly more width (1.5) so the text fits
-                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1.5, 1, 1, 1])
+
+    # Helper function to render a clean, table-like UI using columns
+    def render_policy_section(title, policy_type, start_idx, end_idx, p1_label, p2_label, default_overrides):
+        with st.expander(title, expanded=True):
+            # 1. Header Row
+            hc = st.columns([1.2, 1, 1, 1, 1.2, 1, 1, 1])
+            hc[0].markdown("**SKU**")
+            hc[1].markdown("**Cost (₹)**")
+            hc[2].markdown("**Demand**")
+            hc[3].markdown("**LT (Days)**")
+            hc[4].markdown("**Init Inv**")
+            hc[5].markdown(f"**{p1_label}**")
+            hc[6].markdown(f"**{p2_label}**")
+            hc[7].markdown("**Offset**")
+
+            # 2. Input Rows
+            for i in range(start_idx, end_idx + 1):
+                # Unpack defaults if provided, otherwise set generics
+                if i in default_overrides:
+                    d_inc, d_c, d_d, d_lt, d_p1, d_p2, d_off = default_overrides[i]
+                else:
+                    d_inc, d_c, d_d, d_lt, d_p1, d_p2, d_off = False, 100.0, 10.0, 5, 20.0, 50.0, 0
                 
-                # We define the selectbox first so we can use its value to dynamically change the other labels
-                with c5: 
-                    pol = st.selectbox("Policy", ["Continuous (s, Q)", "Periodic (R, S)"], index=d_pol_idx, key=f"pol_{i}")
+                # Opening balance logic defaults to 1.25 * trigger point
+                d_inv = d_p1 * 1.25 
+
+                cols = st.columns([1.2, 1, 1, 1, 1.2, 1, 1, 1])
                 
-                # Dynamic Labels based on policy choice
-                p1_label = "Reorder Pt (s)" if pol == "Continuous (s, Q)" else "Review (R) Days"
-                p2_label = "Order Qty (Q)" if pol == "Continuous (s, Q)" else "Up-To Lvl (S)"
-                
-                with c1: cost = st.number_input("Cost (₹)", min_value=0.0, value=float(d_c), key=f"c_{i}")
-                with c2: demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"d_{i}")
-                with c3: lt = st.number_input("LT (Days)", min_value=0, value=int(d_lt), key=f"lt_{i}")
-                with c4: init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}")
-                with c6: p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}")
-                with c7: p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}")
-                with c8: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}")
-                
-                sku_data_list.append({
-                    "SKU": f"SKU-{i:02d}",
-                    "Unit Cost (₹)": cost,
-                    "Daily Demand": demand,
-                    "Lead Time (Days)": lt,
-                    "Initial Inventory": init_inv,
-                    "Policy Type": pol,
-                    "Param 1 (s or R)": p1,
-                    "Param 2 (Q or S)": p2,
-                    "Start Offset (Days)": offset
-                })
+                with cols[0]:
+                    include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"inc_{i}")
+                with cols[1]:
+                    cost = st.number_input("Cost", min_value=0.0, value=float(d_c), key=f"c_{i}", label_visibility="collapsed")
+                with cols[2]:
+                    demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"d_{i}", label_visibility="collapsed")
+                with cols[3]:
+                    lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"lt_{i}", label_visibility="collapsed")
+                with cols[4]:
+                    init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}", label_visibility="collapsed")
+                with cols[5]:
+                    p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}", label_visibility="collapsed")
+                with cols[6]:
+                    p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}", label_visibility="collapsed")
+                with cols[7]:
+                    offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}", label_visibility="collapsed")
+
+                # Only add to simulation if the checkbox is ticked
+                if include:
+                    sku_data_list.append({
+                        "SKU": f"SKU-{i:02d}",
+                        "Unit Cost (₹)": cost,
+                        "Daily Demand": demand,
+                        "Lead Time (Days)": lt,
+                        "Initial Inventory": init_inv,
+                        "Policy Type": policy_type,
+                        "Param 1 (s or R)": p1,
+                        "Param 2 (Q or S)": p2,
+                        "Start Offset (Days)": offset
+                    })
+
+    # Continuous Defaults (Pre-loading SKU-01 and SKU-02 as active)
+    cont_defaults = {
+        1: (True, 500.0, 10.0, 3, 30.0, 100.0, 0),
+        2: (True, 150.0, 25.0, 2, 60.0, 200.0, 10)
+    }
+    render_policy_section("🔄 Continuous Review (s, Q) - SKUs 01 to 05", "Continuous (s, Q)", 1, 5, "Reorder Pt (s)", "Order Qty (Q)", cont_defaults)
+
+    # Periodic Defaults (Pre-loading SKU-06 as active)
+    per_defaults = {
+        6: (True, 1200.0, 5.0, 5, 7.0, 60.0, 5)
+    }
+    render_policy_section("📅 Periodic Review (R, S) - SKUs 06 to 10", "Periodic (R, S)", 6, 10, "Review (R) Days", "Up-To Lvl (S)", per_defaults)
 
     active_df = pd.DataFrame(sku_data_list)
 
@@ -2281,7 +2301,7 @@ with tab6:
 
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        # Calculate Working Capital across time (only evaluating physical stock > 0)
+        # Calculate Working Capital across time (evaluating physical stock > 0)
         physical_history = np.maximum(0, history)
         daily_capital = np.sum(physical_history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
@@ -2301,11 +2321,8 @@ with tab6:
         history_df, metrics_df, capital_df = run_vectorized_simulation(active_df, horizon)
 
         st.markdown("### 2. Projected On-Hand Inventory")
-        
-        # Melt data for Altair grouping
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
         
-        # Clean, minimal blue-themed chart
         inv_chart = alt.Chart(inv_melt).mark_line().encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
@@ -2315,7 +2332,6 @@ with tab6:
         st.altair_chart(inv_chart, use_container_width=True, theme=None)
 
         st.markdown("### 3. Total Working Capital Movement")
-        
         cap_chart = alt.Chart(capital_df.reset_index().rename(columns={"index": "Day"})).mark_line(color="#005b96", strokeWidth=2).encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Total Working Capital (₹):Q", title="Capital Tied Up (₹)", axis=alt.Axis(gridColor="#f0f0f0"))
