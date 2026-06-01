@@ -2175,7 +2175,6 @@ with tab6:
         if p >= 0.9999: return 3.719 # Cap for extreme values
         if p <= 0.5: return 0.0
         
-        # Rational approximation for standard normal inverse (Abramowitz & Stegun)
         t = np.sqrt(-2.0 * np.log(1.0 - p))
         num = 2.515517 + 0.802853 * t + 0.010328 * t**2
         den = 1.0 + 1.432788 * t + 0.189269 * t**2 + 0.001308 * t**3
@@ -2183,11 +2182,13 @@ with tab6:
         return z
 
     # Global Parameters
-    colA, colB = st.columns(2)
+    colA, colB, colC = st.columns(3)
     with colA:
         horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
     with colB:
-        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1, help="Drives Safety Stock calculations")
+        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1)
+    with colC:
+        warmup_days = st.slider("Warm-up Period (Days)", min_value=0, max_value=horizon-5, value=min(30, horizon//3), help="Metrics are calculated only after this day.")
     
     Z_score = calculate_z_score(service_level)
     
@@ -2196,7 +2197,6 @@ with tab6:
 
     # 1A. Continuous Review Section
     with st.expander("🔄 Continuous Review (s, Q) - SKUs 01 to 05", expanded=True):
-        # 11 Columns for Continuous
         hc = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.6, 0.8, 0.8, 1])
         hc[0].markdown("**SKU**")
         hc[1].markdown("**Cost**")
@@ -2228,15 +2228,16 @@ with tab6:
             with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"c_hld_{i}", label_visibility="collapsed")
             with cols[7]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"c_off_{i}", label_visibility="collapsed")
             
-            # Mechanical Calculations for Continuous
             s_calc = (demand * lt) + (Z_score * std_dev * np.sqrt(lt))
             hld_cost_annual = cost * (hld_pct / 100.0)
             Q_calc = np.sqrt((2 * demand * 365 * ord_cost) / hld_cost_annual) if hld_cost_annual > 0 else 0
-            open_bal = s_calc * 1.25
+            
+            # Default opening balance populates, but user can edit
+            open_bal_default = s_calc * 1.25
 
             with cols[8]: st.number_input("s", value=float(s_calc), disabled=True, key=f"c_s_{i}", label_visibility="collapsed")
             with cols[9]: st.number_input("Q", value=float(Q_calc), disabled=True, key=f"c_q_{i}", label_visibility="collapsed")
-            with cols[10]: st.number_input("Open", value=float(open_bal), disabled=True, key=f"c_op_{i}", label_visibility="collapsed")
+            with cols[10]: open_bal = st.number_input("Open", value=float(open_bal_default), disabled=False, key=f"c_op_{i}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
@@ -2248,7 +2249,6 @@ with tab6:
 
     # 1B. Periodic Review Section
     with st.expander("📅 Periodic Review (R, S) - SKUs 06 to 10", expanded=True):
-        # 11 Columns for Periodic (Replaced Q with R(Days), and s with S)
         hp = st.columns([1, 0.8, 0.8, 0.8, 0.6, 0.8, 0.7, 0.7, 0.6, 0.9, 1])
         hp[0].markdown("**SKU**")
         hp[1].markdown("**Cost**")
@@ -2281,13 +2281,12 @@ with tab6:
             with cols[7]: R_days = st.number_input("R", min_value=1, value=int(d_r), key=f"p_r_{i}", label_visibility="collapsed")
             with cols[8]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"p_off_{i}", label_visibility="collapsed")
             
-            # Mechanical Calculations for Periodic
             exposure_period = lt + R_days
             S_calc = (demand * exposure_period) + (Z_score * std_dev * np.sqrt(exposure_period))
-            open_bal = S_calc # Starting right at target level
+            open_bal_default = S_calc 
 
             with cols[9]: st.number_input("S", value=float(S_calc), disabled=True, key=f"p_s_{i}", label_visibility="collapsed")
-            with cols[10]: st.number_input("Open", value=float(open_bal), disabled=True, key=f"p_op_{i}", label_visibility="collapsed")
+            with cols[10]: open_bal = st.number_input("Open", value=float(open_bal_default), disabled=False, key=f"p_op_{i}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
@@ -2301,7 +2300,7 @@ with tab6:
 
     # 2. Vectorized Stochastic Simulation Engine
     @st.cache_data 
-    def run_vectorized_simulation(df, days):
+    def run_vectorized_simulation(df, days, warmup):
         N = len(df)
         if N == 0:
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -2325,14 +2324,23 @@ with tab6:
         
         arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
         history = np.zeros((N, days), dtype=float)
-        orders_placed_count = np.zeros(N, dtype=int)
+        
+        # Tracking matrices for metrics evaluation
+        daily_demand_matrix = np.zeros((N, days), dtype=float)
+        lost_sales_matrix = np.zeros((N, days), dtype=float)
+        orders_placed_matrix = np.zeros((N, days), dtype=int)
 
         for t in range(days):
             on_hand += arrivals[:, t]
 
             active = t >= offset
-            stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev))
-            on_hand -= stochastic_demand * active
+            stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev)) * active
+            
+            daily_demand_matrix[:, t] = stochastic_demand
+            on_hand -= stochastic_demand
+            
+            # Track lost sales (backorders avoided) before flooring
+            lost_sales_matrix[:, t] = np.maximum(0, -on_hand)
             on_hand = np.maximum(0, on_hand)
 
             pipeline = np.sum(arrivals[:, t+1:], axis=1)
@@ -2348,7 +2356,7 @@ with tab6:
             order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
 
             valid_orders = order_qty > 0
-            orders_placed_count += valid_orders.astype(int)
+            orders_placed_matrix[:, t] = valid_orders.astype(int)
 
             if np.any(valid_orders):
                 skus_to_order = np.where(valid_orders)[0]
@@ -2361,20 +2369,36 @@ with tab6:
 
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        daily_capital = np.sum(history * costs[:, np.newaxis], axis=0)
+        # SLICE EVALUATION MATRICES based on Warm-up period
+        eval_days = days - warmup
+        steady_history = history[:, warmup:]
+        steady_demand = daily_demand_matrix[:, warmup:]
+        steady_lost_sales = lost_sales_matrix[:, warmup:]
+        steady_orders = np.sum(orders_placed_matrix[:, warmup:], axis=1)
+        
+        daily_capital = np.sum(steady_history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
-        avg_inv = history.mean(axis=1)
+        # KPI Calculations evaluated post-warmup
+        avg_inv = steady_history.mean(axis=1)
         
-        total_order_costs = orders_placed_count * ord_costs_arr
-        total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (days / 365.0)
+        total_order_costs = steady_orders * ord_costs_arr
+        total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (eval_days / 365.0)
         total_opex = total_order_costs + total_holding_costs
+
+        total_steady_demand = np.sum(steady_demand, axis=1)
+        total_steady_lost = np.sum(steady_lost_sales, axis=1)
+        
+        fill_rate = np.where(total_steady_demand > 0, 
+                             (total_steady_demand - total_steady_lost) / total_steady_demand, 
+                             1.0)
 
         metrics_df = pd.DataFrame({
             "SKU": df["SKU"],
             "Avg Physical Inventory": avg_inv,
             "Avg Capital Tied Up (₹)": avg_inv * costs,
-            "Total Orders": orders_placed_count,
+            "Fill Rate (%)": fill_rate * 100,
+            "Total Orders": steady_orders,
             "Ordering Cost (₹)": total_order_costs,
             "Holding Cost (₹)": total_holding_costs,
             "Total OPEX (₹)": total_opex
@@ -2386,22 +2410,43 @@ with tab6:
             "Cost (₹)": total_order_costs.tolist() + total_holding_costs.tolist()
         })
 
-        return history_df, metrics_df, capital_df, cost_breakdown
+        return history_df, metrics_df, capital_df, cost_breakdown, eval_days
 
     # 3. Output Displays
     if not active_df.empty:
-        history_df, metrics_df, capital_df, cost_breakdown = run_vectorized_simulation(active_df, horizon)
+        history_df, metrics_df, capital_df, cost_breakdown, eval_days = run_vectorized_simulation(active_df, horizon, warmup_days)
 
-        st.markdown("### 2. Projected On-Hand Inventory")
+        st.markdown("### 2. Portfolio KPIs (Post Warm-up)")
+        
+        # Absolute KPI values calculated
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        total_avg_inv = metrics_df["Avg Physical Inventory"].sum()
+        total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
+        total_opex_all = metrics_df["Total OPEX (₹)"].sum()
+        avg_fill_rate = metrics_df["Fill Rate (%)"].mean()
+        
+        kpi1.metric("Total Average Inventory", f"{total_avg_inv:,.0f} Physical Units")
+        kpi2.metric("Total Average Capital", f"₹{total_capital:,.2f}")
+        kpi3.metric(f"Total OPEX ({eval_days} Days)", f"₹{total_opex_all:,.2f}")
+        kpi4.metric("Average Fill Rate", f"{avg_fill_rate:.1f}%")
+
+        st.markdown("### 3. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
+        
         inv_chart = alt.Chart(inv_melt).mark_line().encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
             color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
         ).properties(height=350).configure_view(strokeWidth=0)
-        st.altair_chart(inv_chart, use_container_width=True, theme=None)
         
-        st.markdown("### 3. Cost Tradeoff Analysis (OPEX)")
+        # Add visual indicator line for Warm-up Period
+        warmup_rule = alt.Chart(pd.DataFrame({'Day': [warmup_days]})).mark_rule(
+            color='red', strokeDash=[5, 5]
+        ).encode(x='Day:Q')
+        
+        st.altair_chart(inv_chart + warmup_rule, use_container_width=True, theme=None)
+        
+        st.markdown("### 4. Cost Tradeoff Analysis (OPEX)")
         cost_chart = alt.Chart(cost_breakdown).mark_bar().encode(
             x=alt.X("SKU:N", axis=alt.Axis(labelAngle=0)),
             y=alt.Y("Cost (₹):Q", title="Total OPEX (₹)", axis=alt.Axis(gridColor="#f0f0f0")),
@@ -2409,18 +2454,19 @@ with tab6:
         ).properties(height=350).configure_view(strokeWidth=0)
         st.altair_chart(cost_chart, use_container_width=True, theme=None)
 
-        st.markdown("### 4. Total Working Capital Movement")
+        st.markdown("### 5. Total Working Capital Movement")
         cap_chart = alt.Chart(capital_df.reset_index().rename(columns={"index": "Day"})).mark_line(color="#005b96", strokeWidth=2).encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Total Working Capital (₹):Q", title="Capital Tied Up (₹)", axis=alt.Axis(gridColor="#f0f0f0"))
         ).properties(height=300).configure_view(strokeWidth=0)
         st.altair_chart(cap_chart, use_container_width=True, theme=None)
 
-        st.markdown("### 5. Financial Impact Summary")
+        st.markdown("### 6. Detailed Financial Impact")
         st.dataframe(
             metrics_df.style.format({
                 "Avg Physical Inventory": "{:,.1f}", 
                 "Avg Capital Tied Up (₹)": "₹{:,.2f}",
+                "Fill Rate (%)": "{:.2f}%",
                 "Ordering Cost (₹)": "₹{:,.2f}",
                 "Holding Cost (₹)": "₹{:,.2f}",
                 "Total OPEX (₹)": "₹{:,.2f}"
@@ -2429,11 +2475,5 @@ with tab6:
             hide_index=True
         )
 
-        col1, col2 = st.columns(2)
-        total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
-        total_opex_all = metrics_df["Total OPEX (₹)"].sum()
-        
-        col1.metric("Aggregate Average Capital Tied Up", f"₹{total_capital:,.2f}")
-        col2.metric(f"Total Portfolio OPEX ({horizon} Days)", f"₹{total_opex_all:,.2f}")
     else:
         st.info("Please include at least one SKU to run the simulation.")
