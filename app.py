@@ -2177,29 +2177,30 @@ with tab6:
     # Helper function to render a clean, table-like UI using columns
     def render_policy_section(title, policy_type, start_idx, end_idx, p1_label, p2_label, default_overrides):
         with st.expander(title, expanded=True):
-            # 1. Header Row
-            hc = st.columns([1.2, 1, 1, 1, 1.2, 1, 1, 1])
+            # 1. Header Row (Updated with 9 columns to fit Std Dev)
+            hc = st.columns([1.1, 0.9, 0.9, 0.9, 0.8, 1.1, 1, 1, 1])
             hc[0].markdown("**SKU**")
             hc[1].markdown("**Cost (₹)**")
             hc[2].markdown("**Demand**")
-            hc[3].markdown("**LT (Days)**")
-            hc[4].markdown("**Init Inv**")
-            hc[5].markdown(f"**{p1_label}**")
-            hc[6].markdown(f"**{p2_label}**")
-            hc[7].markdown("**Offset**")
+            hc[3].markdown("**Std Dev**")
+            hc[4].markdown("**LT**")
+            hc[5].markdown("**Init Inv**")
+            hc[6].markdown(f"**{p1_label}**")
+            hc[7].markdown(f"**{p2_label}**")
+            hc[8].markdown("**Offset**")
 
             # 2. Input Rows
             for i in range(start_idx, end_idx + 1):
                 # Unpack defaults if provided, otherwise set generics
                 if i in default_overrides:
-                    d_inc, d_c, d_d, d_lt, d_p1, d_p2, d_off = default_overrides[i]
+                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off = default_overrides[i]
                 else:
-                    d_inc, d_c, d_d, d_lt, d_p1, d_p2, d_off = False, 100.0, 10.0, 5, 20.0, 50.0, 0
+                    d_inc, d_c, d_d, d_std, d_lt, d_p1, d_p2, d_off = False, 100.0, 10.0, 2.0, 5, 20.0, 50.0, 0
                 
                 # Opening balance logic defaults to 1.25 * trigger point
                 d_inv = d_p1 * 1.25 
 
-                cols = st.columns([1.2, 1, 1, 1, 1.2, 1, 1, 1])
+                cols = st.columns([1.1, 0.9, 0.9, 0.9, 0.8, 1.1, 1, 1, 1])
                 
                 with cols[0]:
                     include = st.checkbox(f"SKU-{i:02d}", value=d_inc, key=f"inc_{i}")
@@ -2208,14 +2209,16 @@ with tab6:
                 with cols[2]:
                     demand = st.number_input("Demand", min_value=0.0, value=float(d_d), key=f"d_{i}", label_visibility="collapsed")
                 with cols[3]:
-                    lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"lt_{i}", label_visibility="collapsed")
+                    std_dev = st.number_input("Std Dev", min_value=0.0, value=float(d_std), key=f"std_{i}", label_visibility="collapsed")
                 with cols[4]:
-                    init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}", label_visibility="collapsed")
+                    lt = st.number_input("LT", min_value=0, value=int(d_lt), key=f"lt_{i}", label_visibility="collapsed")
                 with cols[5]:
-                    p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}", label_visibility="collapsed")
+                    init_inv = st.number_input("Init Inv", min_value=0.0, value=float(d_inv), key=f"i_{i}", label_visibility="collapsed")
                 with cols[6]:
-                    p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}", label_visibility="collapsed")
+                    p1 = st.number_input(p1_label, min_value=0.0, value=float(d_p1), key=f"p1_{i}", label_visibility="collapsed")
                 with cols[7]:
+                    p2 = st.number_input(p2_label, min_value=0.0, value=float(d_p2), key=f"p2_{i}", label_visibility="collapsed")
+                with cols[8]:
                     offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"off_{i}", label_visibility="collapsed")
 
                 # Only add to simulation if the checkbox is ticked
@@ -2224,6 +2227,7 @@ with tab6:
                         "SKU": f"SKU-{i:02d}",
                         "Unit Cost (₹)": cost,
                         "Daily Demand": demand,
+                        "Std Dev": std_dev,
                         "Lead Time (Days)": lt,
                         "Initial Inventory": init_inv,
                         "Policy Type": policy_type,
@@ -2232,22 +2236,22 @@ with tab6:
                         "Start Offset (Days)": offset
                     })
 
-    # Continuous Defaults (Pre-loading SKU-01 and SKU-02 as active)
+    # Continuous Defaults (Added standard deviation defaults)
     cont_defaults = {
-        1: (True, 500.0, 10.0, 3, 30.0, 100.0, 0),
-        2: (True, 150.0, 25.0, 2, 60.0, 200.0, 10)
+        1: (True, 500.0, 10.0, 2.5, 3, 30.0, 100.0, 0),
+        2: (True, 150.0, 25.0, 6.0, 2, 60.0, 200.0, 10)
     }
     render_policy_section("🔄 Continuous Review (s, Q) - SKUs 01 to 05", "Continuous (s, Q)", 1, 5, "Reorder Pt (s)", "Order Qty (Q)", cont_defaults)
 
-    # Periodic Defaults (Pre-loading SKU-06 as active)
+    # Periodic Defaults (Added standard deviation defaults)
     per_defaults = {
-        6: (True, 1200.0, 5.0, 5, 7.0, 60.0, 5)
+        6: (True, 1200.0, 5.0, 1.5, 5, 7.0, 60.0, 5)
     }
     render_policy_section("📅 Periodic Review (R, S) - SKUs 06 to 10", "Periodic (R, S)", 6, 10, "Review (R) Days", "Up-To Lvl (S)", per_defaults)
 
     active_df = pd.DataFrame(sku_data_list)
 
-    # 2. Vectorized Simulation Engine
+    # 2. Vectorized Stochastic Simulation Engine
     @st.cache_data 
     def run_vectorized_simulation(df, days):
         N = len(df)
@@ -2255,7 +2259,8 @@ with tab6:
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         initial_inv = df["Initial Inventory"].values.astype(float)
-        demand = df["Daily Demand"].values.astype(float)
+        mean_demand = df["Daily Demand"].values.astype(float)
+        std_dev = df["Std Dev"].values.astype(float)
         lt = df["Lead Time (Days)"].values.astype(int) 
         offset = df["Start Offset (Days)"].values.astype(int) 
         costs = df["Unit Cost (₹)"].values.astype(float)
@@ -2274,7 +2279,10 @@ with tab6:
             on_hand += arrivals[:, t]
 
             active = t >= offset
-            on_hand -= demand * active
+            
+            # Generate stochastic demand using normal distribution, floored at 0
+            stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev))
+            on_hand -= stochastic_demand * active
 
             pipeline = np.sum(arrivals[:, t+1:], axis=1)
             inv_position = on_hand + pipeline
