@@ -2175,20 +2175,21 @@ with tab6:
         if p >= 0.9999: return 3.719 # Cap for extreme values
         if p <= 0.5: return 0.0
         
+        # Rational approximation for standard normal inverse (Abramowitz & Stegun)
         t = np.sqrt(-2.0 * np.log(1.0 - p))
         num = 2.515517 + 0.802853 * t + 0.010328 * t**2
         den = 1.0 + 1.432788 * t + 0.189269 * t**2 + 0.001308 * t**3
         z = t - (num / den)
         return z
 
-    # Global Parameters
+    # Global Parameters (With unique keys to prevent duplicate ID errors)
     colA, colB, colC = st.columns(3)
     with colA:
-        horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
+        horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90, key="tab6_horizon_slider")
     with colB:
-        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1)
+        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.1, key="tab6_service_slider", help="Drives Safety Stock calculations")
     with colC:
-        warmup_days = st.slider("Warm-up Period (Days)", min_value=0, max_value=horizon-5, value=min(30, horizon//3), help="Metrics are calculated only after this day.")
+        warmup_days = st.slider("Warm-up Period (Days)", min_value=0, max_value=horizon-5, value=min(30, horizon//3), help="Metrics are calculated only after this day.", key="tab6_warmup_slider")
     
     Z_score = calculate_z_score(service_level)
     
@@ -2228,16 +2229,15 @@ with tab6:
             with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"c_hld_{i}", label_visibility="collapsed")
             with cols[7]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"c_off_{i}", label_visibility="collapsed")
             
+            # Mechanical Calculations for Continuous
             s_calc = (demand * lt) + (Z_score * std_dev * np.sqrt(lt))
             hld_cost_annual = cost * (hld_pct / 100.0)
             Q_calc = np.sqrt((2 * demand * 365 * ord_cost) / hld_cost_annual) if hld_cost_annual > 0 else 0
-            
-            # Default opening balance populates, but user can edit
             open_bal_default = s_calc * 1.25
 
             with cols[8]: st.number_input("s", value=float(s_calc), disabled=True, key=f"c_s_{i}", label_visibility="collapsed")
             with cols[9]: st.number_input("Q", value=float(Q_calc), disabled=True, key=f"c_q_{i}", label_visibility="collapsed")
-            with cols[10]: open_bal = st.number_input("Open", value=float(open_bal_default), disabled=False, key=f"c_op_{i}", label_visibility="collapsed")
+            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), disabled=False, key=f"c_op_{i}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
@@ -2281,12 +2281,13 @@ with tab6:
             with cols[7]: R_days = st.number_input("R", min_value=1, value=int(d_r), key=f"p_r_{i}", label_visibility="collapsed")
             with cols[8]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"p_off_{i}", label_visibility="collapsed")
             
+            # Mechanical Calculations for Periodic
             exposure_period = lt + R_days
             S_calc = (demand * exposure_period) + (Z_score * std_dev * np.sqrt(exposure_period))
             open_bal_default = S_calc 
 
             with cols[9]: st.number_input("S", value=float(S_calc), disabled=True, key=f"p_s_{i}", label_visibility="collapsed")
-            with cols[10]: open_bal = st.number_input("Open", value=float(open_bal_default), disabled=False, key=f"p_op_{i}", label_visibility="collapsed")
+            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), disabled=False, key=f"p_op_{i}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
@@ -2303,7 +2304,7 @@ with tab6:
     def run_vectorized_simulation(df, days, warmup):
         N = len(df)
         if N == 0:
-            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), 0
 
         initial_inv = df["Initial Inventory"].values.astype(float)
         mean_demand = df["Daily Demand"].values.astype(float)
@@ -2371,12 +2372,15 @@ with tab6:
         
         # SLICE EVALUATION MATRICES based on Warm-up period
         eval_days = days - warmup
+        if eval_days <= 0:
+            eval_days = 1 # Prevent division by zero if slider is maxed
+
         steady_history = history[:, warmup:]
         steady_demand = daily_demand_matrix[:, warmup:]
         steady_lost_sales = lost_sales_matrix[:, warmup:]
         steady_orders = np.sum(orders_placed_matrix[:, warmup:], axis=1)
         
-        daily_capital = np.sum(steady_history * costs[:, np.newaxis], axis=0)
+        daily_capital = np.sum(history * costs[:, np.newaxis], axis=0) # Total movement chart uses full history
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
         # KPI Calculations evaluated post-warmup
@@ -2418,7 +2422,6 @@ with tab6:
 
         st.markdown("### 2. Portfolio KPIs (Post Warm-up)")
         
-        # Absolute KPI values calculated
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         total_avg_inv = metrics_df["Avg Physical Inventory"].sum()
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
@@ -2439,7 +2442,6 @@ with tab6:
             color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
         ).properties(height=350).configure_view(strokeWidth=0)
         
-        # Add visual indicator line for Warm-up Period
         warmup_rule = alt.Chart(pd.DataFrame({'Day': [warmup_days]})).mark_rule(
             color='red', strokeDash=[5, 5]
         ).encode(x='Day:Q')
