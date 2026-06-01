@@ -2436,17 +2436,22 @@ with tab6:
         st.markdown("### 3. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
         
+        # 1. Build the base line chart WITHOUT .configure_view()
         inv_chart = alt.Chart(inv_melt).mark_line().encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
             color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
-        ).properties(height=350).configure_view(strokeWidth=0)
+        ).properties(height=350)
         
+        # 2. Build the warm-up indicator line
         warmup_rule = alt.Chart(pd.DataFrame({'Day': [warmup_days]})).mark_rule(
             color='red', strokeDash=[5, 5]
         ).encode(x='Day:Q')
         
-        st.altair_chart(inv_chart + warmup_rule, use_container_width=True, theme=None)
+        # 3. Layer them together FIRST, then apply the configuration to the final object
+        final_inv_chart = (inv_chart + warmup_rule).configure_view(strokeWidth=0)
+        
+        st.altair_chart(final_inv_chart, use_container_width=True, theme=None)
         
         st.markdown("### 4. Cost Tradeoff Analysis (OPEX)")
         cost_chart = alt.Chart(cost_breakdown).mark_bar().encode(
