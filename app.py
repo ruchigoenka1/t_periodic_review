@@ -2175,14 +2175,14 @@ with tab6:
         if p >= 0.9999: return 3.719 # Cap for extreme values
         if p <= 0.5: return 0.0
         
-        # Rational approximation for standard normal inverse (Abramowitz & Stegun)
+        # Rational approximation for standard normal inverse
         t = np.sqrt(-2.0 * np.log(1.0 - p))
         num = 2.515517 + 0.802853 * t + 0.010328 * t**2
         den = 1.0 + 1.432788 * t + 0.189269 * t**2 + 0.001308 * t**3
         z = t - (num / den)
         return z
 
-    # Global Parameters (With unique keys to prevent duplicate ID errors)
+    # Global Parameters
     colA, colB, colC = st.columns(3)
     with colA:
         horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90, key="tab6_horizon_slider")
@@ -2207,8 +2207,8 @@ with tab6:
         hc[5].markdown("**Ord(₹)**")
         hc[6].markdown("**Hld%**")
         hc[7].markdown("**Off**")
-        hc[8].markdown("**s** (Calc)")
-        hc[9].markdown("**Q** (Calc)")
+        hc[8].markdown("**s** (Edit)")
+        hc[9].markdown("**Q** (Edit)")
         hc[10].markdown("**Open Bal**")
 
         cont_defaults = {1: (True, 500.0, 10.0, 2.5, 3, 1000.0, 20.0, 0), 2: (True, 150.0, 25.0, 6.0, 2, 500.0, 15.0, 10)}
@@ -2229,21 +2229,25 @@ with tab6:
             with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"c_hld_{i}", label_visibility="collapsed")
             with cols[7]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"c_off_{i}", label_visibility="collapsed")
             
-            # Mechanical Calculations for Continuous
+            # Mathematical Baselines
             s_calc = (demand * lt) + (Z_score * std_dev * np.sqrt(lt))
             hld_cost_annual = cost * (hld_pct / 100.0)
             Q_calc = np.sqrt((2 * demand * 365 * ord_cost) / hld_cost_annual) if hld_cost_annual > 0 else 0
-            open_bal_default = s_calc * 1.25
+            
+            # Dynamic keys force Streamlit to refresh the input box value when parameters change
+            dyn_c_key = f"c{i}_d{demand}_std{std_dev}_lt{lt}_ord{ord_cost}_hld{hld_pct}_z{Z_score}"
 
-            with cols[8]: st.number_input("s", value=float(s_calc), disabled=True, key=f"c_s_{i}", label_visibility="collapsed")
-            with cols[9]: st.number_input("Q", value=float(Q_calc), disabled=True, key=f"c_q_{i}", label_visibility="collapsed")
-            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), disabled=False, key=f"c_op_{i}", label_visibility="collapsed")
+            with cols[8]: s_val = st.number_input("s", value=float(s_calc), min_value=0.0, key=f"s_{dyn_c_key}", label_visibility="collapsed")
+            with cols[9]: Q_val = st.number_input("Q", value=float(Q_calc), min_value=0.0, key=f"q_{dyn_c_key}", label_visibility="collapsed")
+            
+            open_bal_default = s_val * 1.25
+            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), min_value=0.0, key=f"op_{dyn_c_key}_{s_val}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
                     "SKU": f"SKU-{i:02d}", "Unit Cost (₹)": cost, "Daily Demand": demand, "Std Dev": std_dev,
                     "Lead Time (Days)": lt, "Initial Inventory": open_bal, "Policy Type": "Continuous (s, Q)",
-                    "Param 1 (s or R)": s_calc, "Param 2 (Q or S)": Q_calc, "Start Offset (Days)": offset,
+                    "Param 1 (s or R)": s_val, "Param 2 (Q or S)": Q_val, "Start Offset (Days)": offset,
                     "Order Cost (₹)": ord_cost, "Holding Cost (%)": hld_pct
                 })
 
@@ -2259,7 +2263,7 @@ with tab6:
         hp[6].markdown("**Hld%**")
         hp[7].markdown("**R(Days)**")
         hp[8].markdown("**Off**")
-        hp[9].markdown("**S** (Calc)")
+        hp[9].markdown("**S** (Edit)")
         hp[10].markdown("**Open Bal**")
 
         per_defaults = {6: (True, 1200.0, 5.0, 1.5, 5, 2000.0, 25.0, 7, 5)}
@@ -2281,19 +2285,22 @@ with tab6:
             with cols[7]: R_days = st.number_input("R", min_value=1, value=int(d_r), key=f"p_r_{i}", label_visibility="collapsed")
             with cols[8]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"p_off_{i}", label_visibility="collapsed")
             
-            # Mechanical Calculations for Periodic
+            # Mathematical Baselines
             exposure_period = lt + R_days
             S_calc = (demand * exposure_period) + (Z_score * std_dev * np.sqrt(exposure_period))
-            open_bal_default = S_calc 
+            
+            dyn_p_key = f"p{i}_d{demand}_std{std_dev}_lt{lt}_r{R_days}_z{Z_score}"
 
-            with cols[9]: st.number_input("S", value=float(S_calc), disabled=True, key=f"p_s_{i}", label_visibility="collapsed")
-            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), disabled=False, key=f"p_op_{i}", label_visibility="collapsed")
+            with cols[9]: S_val = st.number_input("S", value=float(S_calc), min_value=0.0, key=f"s_{dyn_p_key}", label_visibility="collapsed")
+            
+            open_bal_default = S_val 
+            with cols[10]: open_bal = st.number_input("Open Bal", value=float(open_bal_default), min_value=0.0, key=f"op_{dyn_p_key}_{S_val}", label_visibility="collapsed")
 
             if include:
                 sku_data_list.append({
                     "SKU": f"SKU-{i:02d}", "Unit Cost (₹)": cost, "Daily Demand": demand, "Std Dev": std_dev,
                     "Lead Time (Days)": lt, "Initial Inventory": open_bal, "Policy Type": "Periodic (R, S)",
-                    "Param 1 (s or R)": R_days, "Param 2 (Q or S)": S_calc, "Start Offset (Days)": offset,
+                    "Param 1 (s or R)": R_days, "Param 2 (Q or S)": S_val, "Start Offset (Days)": offset,
                     "Order Cost (₹)": ord_cost, "Holding Cost (%)": hld_pct
                 })
 
@@ -2326,7 +2333,6 @@ with tab6:
         arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
         history = np.zeros((N, days), dtype=float)
         
-        # Tracking matrices for metrics evaluation
         daily_demand_matrix = np.zeros((N, days), dtype=float)
         lost_sales_matrix = np.zeros((N, days), dtype=float)
         orders_placed_matrix = np.zeros((N, days), dtype=int)
@@ -2340,7 +2346,6 @@ with tab6:
             daily_demand_matrix[:, t] = stochastic_demand
             on_hand -= stochastic_demand
             
-            # Track lost sales (backorders avoided) before flooring
             lost_sales_matrix[:, t] = np.maximum(0, -on_hand)
             on_hand = np.maximum(0, on_hand)
 
@@ -2370,20 +2375,18 @@ with tab6:
 
         history_df = pd.DataFrame(history.T, columns=df["SKU"])
         
-        # SLICE EVALUATION MATRICES based on Warm-up period
         eval_days = days - warmup
         if eval_days <= 0:
-            eval_days = 1 # Prevent division by zero if slider is maxed
+            eval_days = 1 
 
         steady_history = history[:, warmup:]
         steady_demand = daily_demand_matrix[:, warmup:]
         steady_lost_sales = lost_sales_matrix[:, warmup:]
         steady_orders = np.sum(orders_placed_matrix[:, warmup:], axis=1)
         
-        daily_capital = np.sum(history * costs[:, np.newaxis], axis=0) # Total movement chart uses full history
+        daily_capital = np.sum(history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
-        # KPI Calculations evaluated post-warmup
         avg_inv = steady_history.mean(axis=1)
         
         total_order_costs = steady_orders * ord_costs_arr
@@ -2436,21 +2439,17 @@ with tab6:
         st.markdown("### 3. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
         
-        # 1. Build the base line chart WITHOUT .configure_view()
         inv_chart = alt.Chart(inv_melt).mark_line().encode(
             x=alt.X("Day:Q", axis=alt.Axis(grid=False)),
             y=alt.Y("Inventory:Q", title="On-Hand Inventory", axis=alt.Axis(gridColor="#f0f0f0")),
             color=alt.Color("SKU:N", scale=alt.Scale(scheme="blues"))
         ).properties(height=350)
         
-        # 2. Build the warm-up indicator line
         warmup_rule = alt.Chart(pd.DataFrame({'Day': [warmup_days]})).mark_rule(
             color='red', strokeDash=[5, 5]
         ).encode(x='Day:Q')
         
-        # 3. Layer them together FIRST, then apply the configuration to the final object
         final_inv_chart = (inv_chart + warmup_rule).configure_view(strokeWidth=0)
-        
         st.altair_chart(final_inv_chart, use_container_width=True, theme=None)
         
         st.markdown("### 4. Cost Tradeoff Analysis (OPEX)")
