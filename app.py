@@ -2165,6 +2165,9 @@ with tab5:
 
 
 #Multi SKU Simulation
+# Ensure this is placed under your tab definition, e.g.,
+# tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([...])
+
 with tab6:
     st.header("Multi-SKU Dynamic Inventory Simulator")
 
@@ -2204,29 +2207,31 @@ with tab6:
     horizon = st.slider("Simulation Horizon (Days)", min_value=30, max_value=365, value=90)
 
     # 3. Vectorized Simulation Engine
-    @st.cache_data # Cache the results so Streamlit only re-runs when inputs change
+    @st.cache_data 
     def run_vectorized_simulation(df, days):
         N = len(df)
         if N == 0:
             return pd.DataFrame(), pd.DataFrame()
 
-        # Extract to fast NumPy arrays
-        initial_inv = df["Initial Inventory"].values
-        demand = df["Daily Demand"].values
-        lt = df["Lead Time (Days)"].values
-        offset = df["Start Offset (Days)"].values
-        costs = df["Unit Cost (₹)"].values
+        # Extract to fast NumPy arrays and cast types immediately to prevent UFuncOutputCastingError
+        initial_inv = df["Initial Inventory"].values.astype(float)
+        demand = df["Daily Demand"].values.astype(float)
+        lt = df["Lead Time (Days)"].values.astype(int) 
+        offset = df["Start Offset (Days)"].values.astype(int) 
+        costs = df["Unit Cost (₹)"].values.astype(float)
         
         is_cont = (df["Policy Type"] == "Continuous (s, Q)").values
         is_periodic = (df["Policy Type"] == "Periodic (R, S)").values
-        p1 = df["Param 1 (s or R)"].values
-        p2 = df["Param 2 (Q or S)"].values
+        p1 = df["Param 1 (s or R)"].values.astype(float)
+        p2 = df["Param 2 (Q or S)"].values.astype(float)
 
-        # State tracking matrices
-        on_hand = initial_inv.copy()
-        # arrivals matrix: rows are SKUs, columns are specific days future orders arrive
-        arrivals = np.zeros((N, days + np.max(lt) + 1)) 
-        history = np.zeros((N, days))
+        # State tracking matrices - explicitly cast to float
+        on_hand = initial_inv.copy().astype(float)
+        
+        # Arrivals matrix: rows are SKUs, columns are specific days future orders arrive
+        max_lt = 0 if len(lt) == 0 else np.max(lt)
+        arrivals = np.zeros((N, days + max_lt + 1), dtype=float) 
+        history = np.zeros((N, days), dtype=float)
 
         for t in range(days):
             # 1. Receive orders arriving today
@@ -2245,12 +2250,12 @@ with tab6:
 
             # 5. Check Periodic Policy triggers (R, S)
             # Avoid modulo by zero if R (p1) is accidentally set to 0
-            R_safe = np.where(p1 > 0, p1, 1) 
+            R_safe = np.where(p1 > 0, p1, 1).astype(int)
             is_review_day = (t - offset) % R_safe == 0
             trigger_per = active & is_periodic & is_review_day & (inv_position < p2)
 
             # 6. Calculate Order Quantities
-            order_qty = np.zeros(N)
+            order_qty = np.zeros(N, dtype=float)
             order_qty[trigger_cont] = p2[trigger_cont]
             order_qty[trigger_per] = p2[trigger_per] - inv_position[trigger_per]
 
@@ -2286,7 +2291,7 @@ with tab6:
 
     if not history_df.empty:
         st.markdown("### 2. Projected On-Hand Inventory")
-        # Line chart tracks physical behavior over time
+        # Streamlit's native line chart will automatically apply your app's primary theme color
         st.line_chart(history_df)
 
         st.markdown("### 3. Financial Impact")
@@ -2301,5 +2306,5 @@ with tab6:
 
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
         
-        # Display absolute value summary as requested
+        # Display absolute total value
         st.metric("Total Average Capital Tied Up", f"₹{total_capital:,.2f}")
