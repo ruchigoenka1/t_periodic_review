@@ -2384,7 +2384,8 @@ with tab6:
 
         # Post-warmup metrics evaluation
         avg_inv = steady_history.mean(axis=1)
-        peak_inv = steady_history.max(axis=1)
+        peak_inv_units = steady_history.max(axis=1)
+        peak_inv_capital = (steady_history * costs[:, np.newaxis]).max(axis=1)
         
         total_order_costs = steady_orders * ord_costs_arr
         total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (eval_days / 365.0)
@@ -2400,8 +2401,9 @@ with tab6:
         metrics_df = pd.DataFrame({
             "SKU": df["SKU"],
             "Avg Physical Inventory": avg_inv,
-            "Peak Physical Inventory": peak_inv,
+            "Peak Physical Inventory": peak_inv_units,
             "Avg Capital Tied Up (₹)": avg_inv * costs,
+            "Peak Capital Tied Up (₹)": peak_inv_capital,
             "Fill Rate (%)": fill_rate * 100,
             "Total Orders": steady_orders,
             "Ordering Cost (₹)": total_order_costs,
@@ -2423,24 +2425,28 @@ with tab6:
 
         st.markdown("### 2. Portfolio KPIs (Post Warm-up)")
         
-        # 5 Columns to accommodate Portfolio Peak
-        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+        # Split into two rows for cleaner layout on varied screen sizes
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi4, kpi5, kpi6 = st.columns(3)
         
         total_avg_inv = metrics_df["Avg Physical Inventory"].sum()
-        
-        # Portfolio peak evaluates the maximum physical stock across all SKUs concurrently post-warmup
         steady_inv_sum = history_df.iloc[warmup_days:].sum(axis=1)
         peak_portfolio_inv = steady_inv_sum.max() if not steady_inv_sum.empty else 0
 
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
+        steady_cap_sum = capital_df.iloc[warmup_days:]["Total Working Capital (₹)"]
+        peak_portfolio_cap = steady_cap_sum.max() if not steady_cap_sum.empty else 0
+
         total_opex_all = metrics_df["Total OPEX (₹)"].sum()
         avg_fill_rate = metrics_df["Fill Rate (%)"].mean()
         
         kpi1.metric("Total Avg Inventory", f"{total_avg_inv:,.0f} Units")
-        kpi2.metric("Portfolio Peak", f"{peak_portfolio_inv:,.0f} Units")
-        kpi3.metric("Total Avg Capital", f"₹{total_capital:,.2f}")
-        kpi4.metric(f"OPEX ({eval_days} Days)", f"₹{total_opex_all:,.2f}")
-        kpi5.metric("Avg Fill Rate", f"{avg_fill_rate:.1f}%")
+        kpi2.metric("Portfolio Peak (Physical)", f"{peak_portfolio_inv:,.0f} Units")
+        kpi3.metric("Avg Fill Rate", f"{avg_fill_rate:.1f}%")
+        
+        kpi4.metric("Total Avg Capital", f"₹{total_capital:,.2f}")
+        kpi5.metric("Portfolio Peak (Value)", f"₹{peak_portfolio_cap:,.2f}")
+        kpi6.metric(f"OPEX ({eval_days} Days)", f"₹{total_opex_all:,.2f}")
 
         st.markdown("### 3. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
@@ -2479,6 +2485,7 @@ with tab6:
                 "Avg Physical Inventory": "{:,.1f}", 
                 "Peak Physical Inventory": "{:,.1f}", 
                 "Avg Capital Tied Up (₹)": "₹{:,.2f}",
+                "Peak Capital Tied Up (₹)": "₹{:,.2f}",
                 "Fill Rate (%)": "{:.2f}%",
                 "Ordering Cost (₹)": "₹{:,.2f}",
                 "Holding Cost (₹)": "₹{:,.2f}",
