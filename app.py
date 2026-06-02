@@ -2229,12 +2229,10 @@ with tab6:
             with cols[6]: hld_pct = st.number_input("Hold", min_value=0.01, value=float(d_hld), key=f"c_hld_{i}", label_visibility="collapsed")
             with cols[7]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"c_off_{i}", label_visibility="collapsed")
             
-            # Mathematical Baselines
             s_calc = (demand * lt) + (Z_score * std_dev * np.sqrt(lt))
             hld_cost_annual = cost * (hld_pct / 100.0)
             Q_calc = np.sqrt((2 * demand * 365 * ord_cost) / hld_cost_annual) if hld_cost_annual > 0 else 0
             
-            # Dynamic keys force Streamlit to refresh the input box value when parameters change
             dyn_c_key = f"c{i}_d{demand}_std{std_dev}_lt{lt}_ord{ord_cost}_hld{hld_pct}_z{Z_score}"
 
             with cols[8]: s_val = st.number_input("s", value=float(s_calc), min_value=0.0, key=f"s_{dyn_c_key}", label_visibility="collapsed")
@@ -2285,7 +2283,6 @@ with tab6:
             with cols[7]: R_days = st.number_input("R", min_value=1, value=int(d_r), key=f"p_r_{i}", label_visibility="collapsed")
             with cols[8]: offset = st.number_input("Offset", min_value=0, value=int(d_off), key=f"p_off_{i}", label_visibility="collapsed")
             
-            # Mathematical Baselines
             exposure_period = lt + R_days
             S_calc = (demand * exposure_period) + (Z_score * std_dev * np.sqrt(exposure_period))
             
@@ -2306,7 +2303,6 @@ with tab6:
 
     active_df = pd.DataFrame(sku_data_list)
 
-    # 2. Vectorized Stochastic Simulation Engine
     @st.cache_data 
     def run_vectorized_simulation(df, days, warmup):
         N = len(df)
@@ -2339,7 +2335,6 @@ with tab6:
 
         for t in range(days):
             on_hand += arrivals[:, t]
-
             active = t >= offset
             stochastic_demand = np.maximum(0, np.random.normal(loc=mean_demand, scale=std_dev)) * active
             
@@ -2387,7 +2382,9 @@ with tab6:
         daily_capital = np.sum(history * costs[:, np.newaxis], axis=0)
         capital_df = pd.DataFrame(daily_capital, columns=["Total Working Capital (₹)"])
 
+        # Post-warmup metrics evaluation
         avg_inv = steady_history.mean(axis=1)
+        peak_inv = steady_history.max(axis=1)
         
         total_order_costs = steady_orders * ord_costs_arr
         total_holding_costs = avg_inv * costs * (hld_pct_arr / 100.0) * (eval_days / 365.0)
@@ -2403,6 +2400,7 @@ with tab6:
         metrics_df = pd.DataFrame({
             "SKU": df["SKU"],
             "Avg Physical Inventory": avg_inv,
+            "Peak Physical Inventory": peak_inv,
             "Avg Capital Tied Up (₹)": avg_inv * costs,
             "Fill Rate (%)": fill_rate * 100,
             "Total Orders": steady_orders,
@@ -2425,16 +2423,24 @@ with tab6:
 
         st.markdown("### 2. Portfolio KPIs (Post Warm-up)")
         
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        # 5 Columns to accommodate Portfolio Peak
+        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+        
         total_avg_inv = metrics_df["Avg Physical Inventory"].sum()
+        
+        # Portfolio peak evaluates the maximum physical stock across all SKUs concurrently post-warmup
+        steady_inv_sum = history_df.iloc[warmup_days:].sum(axis=1)
+        peak_portfolio_inv = steady_inv_sum.max() if not steady_inv_sum.empty else 0
+
         total_capital = metrics_df["Avg Capital Tied Up (₹)"].sum()
         total_opex_all = metrics_df["Total OPEX (₹)"].sum()
         avg_fill_rate = metrics_df["Fill Rate (%)"].mean()
         
-        kpi1.metric("Total Average Inventory", f"{total_avg_inv:,.0f} Physical Units")
-        kpi2.metric("Total Average Capital", f"₹{total_capital:,.2f}")
-        kpi3.metric(f"Total OPEX ({eval_days} Days)", f"₹{total_opex_all:,.2f}")
-        kpi4.metric("Average Fill Rate", f"{avg_fill_rate:.1f}%")
+        kpi1.metric("Total Avg Inventory", f"{total_avg_inv:,.0f} Units")
+        kpi2.metric("Portfolio Peak", f"{peak_portfolio_inv:,.0f} Units")
+        kpi3.metric("Total Avg Capital", f"₹{total_capital:,.2f}")
+        kpi4.metric(f"OPEX ({eval_days} Days)", f"₹{total_opex_all:,.2f}")
+        kpi5.metric("Avg Fill Rate", f"{avg_fill_rate:.1f}%")
 
         st.markdown("### 3. Projected On-Hand Inventory")
         inv_melt = history_df.reset_index().rename(columns={"index": "Day"}).melt("Day", var_name="SKU", value_name="Inventory")
@@ -2471,6 +2477,7 @@ with tab6:
         st.dataframe(
             metrics_df.style.format({
                 "Avg Physical Inventory": "{:,.1f}", 
+                "Peak Physical Inventory": "{:,.1f}", 
                 "Avg Capital Tied Up (₹)": "₹{:,.2f}",
                 "Fill Rate (%)": "{:.2f}%",
                 "Ordering Cost (₹)": "₹{:,.2f}",
