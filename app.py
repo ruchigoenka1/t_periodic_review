@@ -3054,289 +3054,309 @@ with tab4:
 
 
 with tab5:
-    st.header("⚖️ Advanced Inventory Optimization Suite")
-    st.markdown(
-        "Analyze your inventory data through a twin-lens framework. First, review a historical backtest audit "
-        "to identify legacy profit leaks."
-    )
-    
-
-    # --- 🚀 THE VECTORIZED SIMULATION ENGINE (DYNAMIC FIFO AGE BUCKETS) ---
-    def fast_simulate_inventory(demand_arr, purchase_arr, opening_stock, lead_time, policy_type, param1, param2, age_bucket_edges=[30, 60, 90]):
-        total_days = len(demand_arr)
-        inv_levels = np.zeros(total_days)
-        lost_sales = np.zeros(total_days)
-        orders_placed = np.zeros(total_days)
+        st.header("⚖️ Advanced Inventory Optimization Suite")
+        st.markdown(
+            "Analyze your inventory data through a twin-lens framework. First, review a historical backtest audit "
+            "to identify legacy profit leaks."
+        )
         
-        # FIFO Age Tracking Arrays
-        avg_ages = np.zeros(total_days)
-        max_ages = np.zeros(total_days)
-        
-        num_buckets = len(age_bucket_edges) + 1
-        age_buckets = np.zeros((total_days, num_buckets)) 
-        
-        max_lt = int(lead_time)
-        pipeline = np.zeros(total_days + max_lt + 1)
-        
-        if policy_type == "Actual":
-            pipeline[:total_days] = purchase_arr
-        else:
-            warm_up = min(max_lt, total_days)
-            pipeline[:warm_up] = purchase_arr[:warm_up]
+        # --- 🚀 THE VECTORIZED SIMULATION ENGINE (DYNAMIC FIFO AGE BUCKETS) ---
+        def fast_simulate_inventory(demand_arr, purchase_arr, opening_stock, lead_time, policy_type, param1, param2, age_bucket_edges=[30, 60, 90]):
+            total_days = len(demand_arr)
+            inv_levels = np.zeros(total_days)
+            lost_sales = np.zeros(total_days)
+            orders_placed = np.zeros(total_days)
             
-        current_inv = opening_stock
-        fifo_queue = [[0, opening_stock]] if opening_stock > 0 else []
-        
-        for i in range(total_days):
-            demand = demand_arr[i]
-            arriving = pipeline[i]
+            # Split positive receipts from negative returns to apply write-offs universally
+            positive_receipts = np.where(purchase_arr > 0, purchase_arr, 0)
+            negative_returns = np.where(purchase_arr < 0, np.abs(purchase_arr), 0)
             
-            if arriving > 0:
-                fifo_queue.append([i, arriving])
-                current_inv += arriving
-                
-            demand_left = demand
-            while demand_left > 0 and fifo_queue:
-                oldest_batch_qty = fifo_queue[0][1]
-                if oldest_batch_qty <= demand_left:
-                    demand_left -= oldest_batch_qty
-                    fifo_queue.pop(0) 
-                else:
-                    fifo_queue[0][1] -= demand_left
-                    demand_left = 0 
-                    
-            if demand_left > 0:
-                lost_sales[i] = demand_left
-                current_inv = 0
+            # FIFO Age Tracking Arrays
+            avg_ages = np.zeros(total_days)
+            max_ages = np.zeros(total_days)
+            
+            num_buckets = len(age_bucket_edges) + 1
+            age_buckets = np.zeros((total_days, num_buckets)) 
+            
+            max_lt = int(lead_time)
+            pipeline = np.zeros(total_days + max_lt + 1)
+            
+            if policy_type == "Actual":
+                pipeline[:total_days] = positive_receipts
             else:
-                current_inv -= demand
+                warm_up = min(max_lt, total_days)
+                pipeline[:warm_up] = positive_receipts[:warm_up]
                 
-            inv_levels[i] = current_inv
+            current_inv = opening_stock
+            fifo_queue = [[0, opening_stock]] if opening_stock > 0 else []
             
-            # Calculate Age Metrics & Dynamic Buckets
-            if fifo_queue:
-                total_qty = 0
-                sum_age_qty = 0
-                max_age_val = 0
+            for i in range(total_days):
+                demand = demand_arr[i]
+                arriving = pipeline[i]
+                daily_return = negative_returns[i]
                 
-                for item in fifo_queue:
-                    arr_day, qty = item
-                    age = i - arr_day
-                    total_qty += qty
-                    sum_age_qty += (age * qty)
+                # 1. Process Positive Arriving Stock
+                if arriving > 0:
+                    fifo_queue.append([i, arriving])
+                    current_inv += arriving
                     
-                    if age > max_age_val:
-                        max_age_val = age
+                # 2. Mechanically Deduct Returns / Expiries / Write-offs
+                if daily_return > 0:
+                    current_inv = max(0, current_inv - daily_return)
+                    # Deduct from FIFO queue to clear out the oldest physical stock
+                    while daily_return > 0 and fifo_queue:
+                        oldest_batch_qty = fifo_queue[0][1]
+                        if oldest_batch_qty <= daily_return:
+                            daily_return -= oldest_batch_qty
+                            fifo_queue.pop(0)
+                        else:
+                            fifo_queue[0][1] -= daily_return
+                            daily_return = 0
+                            
+                # 3. Fulfill Valid Customer Demand
+                demand_left = demand
+                while demand_left > 0 and fifo_queue:
+                    oldest_batch_qty = fifo_queue[0][1]
+                    if oldest_batch_qty <= demand_left:
+                        demand_left -= oldest_batch_qty
+                        fifo_queue.pop(0) 
+                    else:
+                        fifo_queue[0][1] -= demand_left
+                        demand_left = 0 
                         
-                    # Dynamic bucket sorting
-                    idx = 0
-                    while idx < len(age_bucket_edges) and age > age_bucket_edges[idx]:
-                        idx += 1
-                    age_buckets[i, idx] += qty
+                if demand_left > 0:
+                    lost_sales[i] = demand_left
+                    current_inv = 0
+                else:
+                    current_inv -= demand
+                    
+                inv_levels[i] = current_inv
+                
+                # Calculate Age Metrics & Dynamic Buckets
+                if fifo_queue:
+                    total_qty = 0
+                    sum_age_qty = 0
+                    max_age_val = 0
+                    
+                    for item in fifo_queue:
+                        arr_day, qty = item
+                        age = i - arr_day
+                        total_qty += qty
+                        sum_age_qty += (age * qty)
                         
-                if total_qty > 0:
-                    avg_ages[i] = sum_age_qty / total_qty
-                    max_ages[i] = max_age_val
-            
-            if policy_type == "Continuous Review (Q, R)":
-                net_position = current_inv + np.sum(pipeline[i+1:])
-                if net_position <= param2:
-                    pipeline[i + max_lt] += param1
-                    orders_placed[i] = param1
-            elif policy_type == "Periodic Review (P, T)":
-                if i % int(param1) == 0:
+                        if age > max_age_val:
+                            max_age_val = age
+                            
+                        # Dynamic bucket sorting
+                        idx = 0
+                        while idx < len(age_bucket_edges) and age > age_bucket_edges[idx]:
+                            idx += 1
+                        age_buckets[i, idx] += qty
+                            
+                    if total_qty > 0:
+                        avg_ages[i] = sum_age_qty / total_qty
+                        max_ages[i] = max_age_val
+                
+                if policy_type == "Continuous Review (Q, R)":
                     net_position = current_inv + np.sum(pipeline[i+1:])
-                    order_qty = max(0, param2 - net_position)
-                    if order_qty > 0:
-                        pipeline[i + max_lt] += order_qty
-                        orders_placed[i] = order_qty
+                    if net_position <= param2:
+                        pipeline[i + max_lt] += param1
+                        orders_placed[i] = param1
+                elif policy_type == "Periodic Review (P, T)":
+                    if i % int(param1) == 0:
+                        net_position = current_inv + np.sum(pipeline[i+1:])
+                        order_qty = max(0, param2 - net_position)
+                        if order_qty > 0:
+                            pipeline[i + max_lt] += order_qty
+                            orders_placed[i] = order_qty
+                            
+            return inv_levels, lost_sales, orders_placed, avg_ages, max_ages, age_buckets
+
+        # --- STEP 1: INPUT PARAMETERS ---
+        st.subheader("1. Parameters & Cost Drivers")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            item_unit_cost = st.number_input("Item Unit Cost ($/Unit)", min_value=0.01, value=25.00, step=1.00, key="unit_cost_global")
+            holding_fixed_daily = st.number_input("Fixed Holding Cost ($/Unit/Day)", min_value=0.0, value=0.0, step=0.01, key="fixed_hold_global")
+            
+        with col2:
+            holding_var_pct = st.number_input("Variable Holding Cost (% of Item Cost/year)", min_value=0.0, max_value=100.0, value=15.0, step=1.0, key="var_hold_global") / 100.0
+            ordering_cost = st.number_input("Ordering Cost ($/order)", min_value=0.1, value=75.0, step=5.0, key="order_cost_global")
+            
+        with col3:
+            lost_sales_penalty = st.number_input("Lost Sales Penalty ($/Unit Lost)", min_value=0.0, value=0.0, step=1.0, key="penalty_global")
+            lead_time_days = st.number_input("Lead Time (Days)", min_value=1, value=14, step=1, key="lt_global")
+
+        st.markdown("---")
+        col_sys1, col_sys2 = st.columns([1, 2])
+        with col_sys1:
+            review_system = st.radio("Inventory Review System Strategy", ["Continuous Review (Q, R)", "Periodic Review (P, T)"], key="review_system_global")
+        with col_sys2:
+            service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.5, key="service_level_global") / 100.0
+
+        if review_system == "Periodic Review (P, T)":
+            st.markdown("##### ⏳ Periodic Configuration")
+            p_col1, _ = st.columns(2)
+            with p_col1:
+                user_p_days = st.number_input("Review Period Cycle (P in Days)", min_value=1, value=14, step=1, key="p_days_global")
+        else:
+            user_p_days = 1
+
+        # --- STEP 2: MULTI-FORMAT DATA INGESTION ENGINE ---
+        st.subheader("2. Upload Historical Invoices & Demand Data")
+        uploaded_file = st.file_uploader(
+            "Upload Inventory Ledger (Supports standard templates, raw ERP transactional logs, or stock card snapshots)", 
+            type=["csv", "xlsx", "xls"], 
+            key="uploader_global"
+        )
+        
+        if uploaded_file is None:
+            st.info("📥 Please upload your inventory ledger file (CSV or Excel) above to populate the suite modules.")
+        else:
+            detected_sheet_opening_stock = None
+            data_loaded_successfully = False
+            df_mapped = None
+            
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    raw_df = pd.read_csv(uploaded_file)
+                else:
+                    raw_df = pd.read_excel(uploaded_file)
+                    
+                raw_df.columns = raw_df.columns.str.strip()
+                    
+                if "Date" not in raw_df.columns:
+                    st.error("❌ Missing required column: 'Date'.")
+                else:
+                    raw_df["Date"] = pd.to_datetime(raw_df["Date"])
+                    raw_df = raw_df.sort_values(by="Date").reset_index(drop=True)
+                    
+                    open_balance_headers = ["Opening Balance", "Opening", "Opening_Stock", "Opening Stock"]
+                    for header in open_balance_headers:
+                        if header in raw_df.columns:
+                            detected_sheet_opening_stock = int(raw_df[header].iloc[0])
+                            break
+                    
+                    if "Demand_Qty" in raw_df.columns and "Purchase_Qty" in raw_df.columns:
+                        df_mapped = raw_df[["Date", "Demand_Qty", "Purchase_Qty"]].copy()
+                    elif "Demand" in raw_df.columns and "Stock Received" in raw_df.columns:
+                        df_mapped = pd.DataFrame({"Date": raw_df["Date"], "Demand_Qty": raw_df["Demand"], "Purchase_Qty": raw_df["Stock Received"]})
+                    elif ("Receiving" in raw_df.columns) and any(col in raw_df.columns for col in ["Demand/Sales", "Demand", "Sales"]):
+                        outbound_col = "Demand/Sales" if "Demand/Sales" in raw_df.columns else ("Demand" if "Demand" in raw_df.columns else "Sales")
+                        df_mapped = pd.DataFrame({"Date": raw_df["Date"], "Demand_Qty": raw_df[outbound_col], "Purchase_Qty": raw_df["Receiving"]})
+                    else:
+                        st.error("❌ Column layout structure mismatch. Could not find Demand and Receiving columns.")
+
+                    if df_mapped is not None:
+                        df_mapped = df_mapped.groupby("Date").agg({"Demand_Qty": "sum", "Purchase_Qty": "sum"}).reset_index()
+                        df_mapped = df_mapped.set_index("Date").resample("1D").asfreq()
+                        df_mapped["Demand_Qty"] = df_mapped["Demand_Qty"].fillna(0.0)
+                        df_mapped["Purchase_Qty"] = df_mapped["Purchase_Qty"].fillna(0.0)
+                        df_mapped = df_mapped.reset_index()
+                        data_loaded_successfully = True
                         
-        return inv_levels, lost_sales, orders_placed, avg_ages, max_ages, age_buckets
+            except Exception as e:
+                st.error(f"Error parsing file elements: {e}")
 
-    # --- STEP 1: INPUT PARAMETERS ---
-    st.subheader("1. Parameters & Cost Drivers")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        item_unit_cost = st.number_input("Item Unit Cost ($/Unit)", min_value=0.01, value=25.00, step=1.00, key="unit_cost_global")
-        holding_fixed_daily = st.number_input("Fixed Holding Cost ($/Unit/Day)", min_value=0.0, value=0.0, step=0.01, key="fixed_hold_global")
-        
-    with col2:
-        holding_var_pct = st.number_input("Variable Holding Cost (% of Item Cost/year)", min_value=0.0, max_value=100.0, value=15.0, step=1.0, key="var_hold_global") / 100.0
-        ordering_cost = st.number_input("Ordering Cost ($/order)", min_value=0.1, value=75.0, step=5.0, key="order_cost_global")
-        
-    with col3:
-        lost_sales_penalty = st.number_input("Lost Sales Penalty ($/Unit Lost)", min_value=0.0, value=0.0, step=1.0, key="penalty_global")
-        lead_time_days = st.number_input("Lead Time (Days)", min_value=1, value=14, step=1, key="lt_global")
+            # ONLY PROCEED IF DATA IS CLEANED
+            if data_loaded_successfully and df_mapped is not None:
+                full_df = df_mapped.copy() 
+                
+                absolute_min_date = full_df["Date"].min().date()
+                absolute_max_date = full_df["Date"].max().date()
+                
+                file_state_key = f"last_file_{uploaded_file.name}_{uploaded_file.size}"
+                
+                if "current_file_token" not in st.session_state or st.session_state.current_file_token != file_state_key:
+                    st.session_state.current_file_token = file_state_key
+                    st.session_state.min_date_global = absolute_min_date
+                    st.session_state.max_date_global = absolute_max_date
+                    
+                    avg_daily_full = full_df["Demand_Qty"].mean()
+                    if detected_sheet_opening_stock is not None:
+                        default_start = int(detected_sheet_opening_stock)
+                    else:
+                        default_start = int(1.25 * (avg_daily_full * lead_time_days))
+                    
+                    st.session_state.absolute_day1_stock = default_start
+                    st.session_state.previous_start_date = absolute_min_date
+                    st.session_state.previous_end_date = absolute_max_date
+                    st.session_state.opening_stock_global = default_start
+                    
+                    st.session_state.start_date_key = absolute_min_date
+                    st.session_state.end_date_key = absolute_max_date
+                    
+                    if "q_audit_suite" in st.session_state: del st.session_state.q_audit_suite
+                    if "rop_audit_suite" in st.session_state: del st.session_state.rop_audit_suite
 
-    st.markdown("---")
-    col_sys1, col_sys2 = st.columns([1, 2])
-    with col_sys1:
-        review_system = st.radio("Inventory Review System Strategy", ["Continuous Review (Q, R)", "Periodic Review (P, T)"], key="review_system_global")
-    with col_sys2:
-        service_level = st.slider("Target Service Level (%)", min_value=50.0, max_value=99.9, value=95.0, step=0.5, key="service_level_global") / 100.0
+                st.divider()
+                
+                st.markdown("### 📅 3. Select Analysis Period")
+                st.markdown("Filter historical data. The starting inventory will automatically mathematically roll forward to match your selected Start Date.")
+                
+                def reset_dates():
+                    st.session_state.start_date_key = st.session_state.min_date_global
+                    st.session_state.end_date_key = st.session_state.max_date_global
+                    st.session_state.previous_start_date = st.session_state.min_date_global
+                    st.session_state.previous_end_date = st.session_state.max_date_global
+                    st.session_state.opening_stock_global = st.session_state.absolute_day1_stock
 
-    if review_system == "Periodic Review (P, T)":
-        st.markdown("##### ⏳ Periodic Configuration")
-        p_col1, _ = st.columns(2)
-        with p_col1:
-            user_p_days = st.number_input("Review Period Cycle (P in Days)", min_value=1, value=14, step=1, key="p_days_global")
-    else:
-        user_p_days = 1
+                col_date1, col_date2, col_date3 = st.columns([2, 2, 1])
+                
+                with col_date1:
+                    start_date = st.date_input("Starting Date", min_value=absolute_min_date, max_value=absolute_max_date, key="start_date_key")
+                with col_date2:
+                    end_date = st.date_input("Ending Date", min_value=absolute_min_date, max_value=absolute_max_date, key="end_date_key")
+                with col_date3:
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    st.button("🔄 Reset", on_click=reset_dates, use_container_width=True)
+                
+                if "previous_start_date" not in st.session_state:
+                    st.session_state.previous_start_date = absolute_min_date
+                if "previous_end_date" not in st.session_state:
+                    st.session_state.previous_end_date = absolute_max_date
 
-    # --- STEP 2: MULTI-FORMAT DATA INGESTION ENGINE ---
-    st.subheader("2. Upload Historical Invoices & Demand Data")
-    uploaded_file = st.file_uploader(
-        "Upload Inventory Ledger (Supports standard templates, raw ERP transactional logs, or stock card snapshots)", 
-        type=["csv", "xlsx", "xls"], 
-        key="uploader_global"
-    )
-    
-    if uploaded_file is None:
-        st.info("📥 Please upload your inventory ledger file (CSV or Excel) above to populate the suite modules.")
-    else:
-        detected_sheet_opening_stock = None
-        data_loaded_successfully = False
-        df_mapped = None
-        
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                raw_df = pd.read_csv(uploaded_file)
-            else:
-                raw_df = pd.read_excel(uploaded_file)
-                
-            raw_df.columns = raw_df.columns.str.strip()
-                
-            if "Date" not in raw_df.columns:
-                st.error("❌ Missing required column: 'Date'.")
-            else:
-                raw_df["Date"] = pd.to_datetime(raw_df["Date"])
-                raw_df = raw_df.sort_values(by="Date").reset_index(drop=True)
-                
-                open_balance_headers = ["Opening Balance", "Opening", "Opening_Stock", "Opening Stock"]
-                for header in open_balance_headers:
-                    if header in raw_df.columns:
-                        detected_sheet_opening_stock = int(raw_df[header].iloc[0])
-                        break
-                
-                if "Demand_Qty" in raw_df.columns and "Purchase_Qty" in raw_df.columns:
-                    df_mapped = raw_df[["Date", "Demand_Qty", "Purchase_Qty"]].copy()
-                elif "Demand" in raw_df.columns and "Stock Received" in raw_df.columns:
-                    df_mapped = pd.DataFrame({"Date": raw_df["Date"], "Demand_Qty": raw_df["Demand"], "Purchase_Qty": raw_df["Stock Received"]})
-                elif ("Receiving" in raw_df.columns) and any(col in raw_df.columns for col in ["Demand/Sales", "Demand", "Sales"]):
-                    outbound_col = "Demand/Sales" if "Demand/Sales" in raw_df.columns else ("Demand" if "Demand" in raw_df.columns else "Sales")
-                    df_mapped = pd.DataFrame({"Date": raw_df["Date"], "Demand_Qty": raw_df[outbound_col], "Purchase_Qty": raw_df["Receiving"]})
+                date_changed = (start_date != st.session_state.previous_start_date) or (end_date != st.session_state.previous_end_date)
+
+                if date_changed:
+                    if "q_audit_suite" in st.session_state: del st.session_state.q_audit_suite
+                    if "rop_audit_suite" in st.session_state: del st.session_state.rop_audit_suite
+                    
+                    if start_date != st.session_state.previous_start_date:
+                        temp_balance = st.session_state.absolute_day1_stock
+                        pre_period_df = full_df[full_df["Date"].dt.date < start_date]
+                        
+                        pre_d_arr = pre_period_df["Demand_Qty"].values
+                        pre_p_arr = pre_period_df["Purchase_Qty"].values
+                        for idx in range(len(pre_d_arr)):
+                            temp_balance = max(0, temp_balance + pre_p_arr[idx] - pre_d_arr[idx])
+                        
+                        st.session_state.opening_stock_global = int(temp_balance)
+                    
+                    st.session_state.previous_start_date = start_date
+                    st.session_state.previous_end_date = end_date
+
+                if start_date > end_date:
+                    st.error("⚠️ The Starting Date must be before or equal to the Ending Date. Please adjust your selection.")
                 else:
-                    st.error("❌ Column layout structure mismatch. Could not find Demand and Receiving columns.")
-
-                if df_mapped is not None:
-                    df_mapped = df_mapped.groupby("Date").agg({"Demand_Qty": "sum", "Purchase_Qty": "sum"}).reset_index()
-                    df_mapped = df_mapped.set_index("Date").resample("1D").asfreq()
-                    df_mapped["Demand_Qty"] = df_mapped["Demand_Qty"].fillna(0.0)
-                    df_mapped["Purchase_Qty"] = df_mapped["Purchase_Qty"].fillna(0.0)
-                    df_mapped = df_mapped.reset_index()
-                    data_loaded_successfully = True
+                    df = full_df[(full_df["Date"].dt.date >= start_date) & (full_df["Date"].dt.date <= end_date)].reset_index(drop=True)
                     
-        except Exception as e:
-            st.error(f"Error parsing file elements: {e}")
-
-        # ONLY PROCEED IF DATA IS CLEANED
-        if data_loaded_successfully and df_mapped is not None:
-            full_df = df_mapped.copy() 
-            
-            absolute_min_date = full_df["Date"].min().date()
-            absolute_max_date = full_df["Date"].max().date()
-            
-            file_state_key = f"last_file_{uploaded_file.name}_{uploaded_file.size}"
-            
-            if "current_file_token" not in st.session_state or st.session_state.current_file_token != file_state_key:
-                st.session_state.current_file_token = file_state_key
-                st.session_state.min_date_global = absolute_min_date
-                st.session_state.max_date_global = absolute_max_date
-                
-                avg_daily_full = full_df["Demand_Qty"].mean()
-                if detected_sheet_opening_stock is not None:
-                    default_start = int(detected_sheet_opening_stock)
-                else:
-                    default_start = int(1.25 * (avg_daily_full * lead_time_days))
-                
-                st.session_state.absolute_day1_stock = default_start
-                st.session_state.previous_start_date = absolute_min_date
-                st.session_state.previous_end_date = absolute_max_date
-                st.session_state.opening_stock_global = default_start
-                
-                st.session_state.start_date_key = absolute_min_date
-                st.session_state.end_date_key = absolute_max_date
-                
-                if "q_audit_suite" in st.session_state: del st.session_state.q_audit_suite
-                if "rop_audit_suite" in st.session_state: del st.session_state.rop_audit_suite
-
-            st.divider()
-            
-            st.markdown("### 📅 3. Select Analysis Period")
-            st.markdown("Filter historical data. The starting inventory will automatically mathematically roll forward to match your selected Start Date.")
-            
-            def reset_dates():
-                st.session_state.start_date_key = st.session_state.min_date_global
-                st.session_state.end_date_key = st.session_state.max_date_global
-                st.session_state.previous_start_date = st.session_state.min_date_global
-                st.session_state.previous_end_date = st.session_state.max_date_global
-                st.session_state.opening_stock_global = st.session_state.absolute_day1_stock
-
-            col_date1, col_date2, col_date3 = st.columns([2, 2, 1])
-            
-            with col_date1:
-                start_date = st.date_input("Starting Date", min_value=absolute_min_date, max_value=absolute_max_date, key="start_date_key")
-            with col_date2:
-                end_date = st.date_input("Ending Date", min_value=absolute_min_date, max_value=absolute_max_date, key="end_date_key")
-            with col_date3:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                st.button("🔄 Reset", on_click=reset_dates, use_container_width=True)
-            
-            if "previous_start_date" not in st.session_state:
-                st.session_state.previous_start_date = absolute_min_date
-            if "previous_end_date" not in st.session_state:
-                st.session_state.previous_end_date = absolute_max_date
-
-            date_changed = (start_date != st.session_state.previous_start_date) or (end_date != st.session_state.previous_end_date)
-
-            if date_changed:
-                if "q_audit_suite" in st.session_state: del st.session_state.q_audit_suite
-                if "rop_audit_suite" in st.session_state: del st.session_state.rop_audit_suite
-                
-                if start_date != st.session_state.previous_start_date:
-                    temp_balance = st.session_state.absolute_day1_stock
-                    pre_period_df = full_df[full_df["Date"].dt.date < start_date]
-                    
-                    pre_d_arr = pre_period_df["Demand_Qty"].values
-                    pre_p_arr = pre_period_df["Purchase_Qty"].values
-                    for idx in range(len(pre_d_arr)):
-                        temp_balance = max(0, temp_balance + pre_p_arr[idx] - pre_d_arr[idx])
-                    
-                    st.session_state.opening_stock_global = int(temp_balance)
-                
-                st.session_state.previous_start_date = start_date
-                st.session_state.previous_end_date = end_date
-
-            if start_date > end_date:
-                st.error("⚠️ The Starting Date must be before or equal to the Ending Date. Please adjust your selection.")
-            else:
-                df = full_df[(full_df["Date"].dt.date >= start_date) & (full_df["Date"].dt.date <= end_date)].reset_index(drop=True)
-                
-                if df.empty:
-                    st.warning("No data available for the selected date range. Please widen your selection.")
-                else:
-                    demand_arr_main = df["Demand_Qty"].values
-                    purchase_arr_main = df["Purchase_Qty"].values
-                    
-                    actual_orders_placed = np.count_nonzero(purchase_arr_main)
-                    actual_total_units_purchased = purchase_arr_main.sum()
-                    total_demand = demand_arr_main.sum()
-                    
-                    avg_daily_demand_calc = demand_arr_main.mean()
-                    std_daily_demand = demand_arr_main.std() if len(df) > 1 else 0
-                    cov = std_daily_demand / max(0.1, avg_daily_demand_calc)
+                    if df.empty:
+                        st.warning("No data available for the selected date range. Please widen your selection.")
+                    else:
+                        demand_arr_main = df["Demand_Qty"].values
+                        purchase_arr_main = df["Purchase_Qty"].values
+                        
+                        # Filter for actual positive purchase orders to calculate correct baseline KPIs
+                        actual_orders_placed = np.count_nonzero(purchase_arr_main[purchase_arr_main > 0])
+                        actual_total_units_purchased = purchase_arr_main[purchase_arr_main > 0].sum()
+                        total_demand = demand_arr_main.sum()
+                        
+                        avg_daily_demand_calc = demand_arr_main.mean()
+                        std_daily_demand = demand_arr_main.std() if len(df) > 1 else 0
+                        cov = std_daily_demand / max(0.1, avg_daily_demand_calc)
 
                     with st.expander("📈 View Historical Demand Trend & Growth Timeline", expanded=False):
                         rolling_days = st.slider("Select Rolling Average Window (Days)", min_value=1, max_value=90, value=15, step=1)
@@ -3590,13 +3610,6 @@ with tab5:
                         prev_edge = edge + 1
                     bucket_labels.append(f"{prev_edge}+ Days")
 
-                    # Generate dynamic Blue-to-Red color gradient using Plotly's RdBu_r
-                    # num_buckets = len(bucket_labels)
-                    # if num_buckets == 1:
-                    #     bucket_colors = [px.colors.sample_colorscale("RdBu_r", [0.0])[0]]
-                    # else:
-                    #     bucket_colors = px.colors.sample_colorscale("RdBu_r", [i / (num_buckets - 1) for i in range(num_buckets)])
-                    
                     num_buckets = len(bucket_labels)
                     
                     if num_buckets == 1:
@@ -3823,7 +3836,7 @@ with tab5:
                                 st.dataframe(drill_df, hide_index=True, use_container_width=True)
 
                     # ==========================================
-                    #      SECTION B: COMPARATIVE ANALYSIS
+                    #     SECTION B: COMPARATIVE ANALYSIS
                     # ==========================================
                     st.markdown("---")
                     st.header("🔬 Section B: Multi-Scenario Comparative Analysis")
@@ -3978,7 +3991,6 @@ with tab5:
                                 height=450, legend=dict(orientation="h", y=1.1, x=1, xanchor="right")
                             )
                             st.plotly_chart(comp_fig, use_container_width=True)
-
 #Multi SKU Simulation
 with tab6:
     st.header("Multi-SKU Dynamic Inventory Simulator")
