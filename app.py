@@ -3554,7 +3554,7 @@ with tab5:
                         if review_system == "Continuous Review (Q, R)":
                             final_q = st.number_input("Target Order Quantity (Q)", min_value=1, step=10, key="q_audit_suite")
                         else:
-                            cycle_demand_baseline = int(avg_daily_demand_calc * user_p_days)
+                            cycle_demand_baseline = max(1, int(avg_daily_demand_calc * user_p_days))
                             final_q = st.number_input("Average Target Batch Size (Q)", min_value=1, value=cycle_demand_baseline, step=10, disabled=True, key="q_audit_suite_disabled")
                     with adjust_col2:
                         final_buffer_target = st.number_input("Reorder Point (ROP) / Target Level (T)", min_value=0, step=10, key="rop_audit_suite")
