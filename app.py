@@ -3709,7 +3709,7 @@ with tab5:
                             st.markdown(f"<div style='margin-top: -15px; font-size: 0.85rem; color: gray;'>Historical: ${act_avg_wc:,.0f}</div>", unsafe_allow_html=True)
                         with kpi_col4:
                             release_label = "Cash Released" if cash_released >= 0 else "Capital Added (Tied Up)"
-                            st.metric(label=release_label, value=f"${abs(cash_released):,.0f}")
+                            # st.metric(label=release_label, value=f"${abs(cash_released):,.0f}")
                             cash_released_pct = (cash_released / act_avg_wc) * 100 if act_avg_wc > 0 else 0.0
                             st.metric(label=release_label, value=f"${abs(cash_released):,.0f}", delta=f"{cash_released_pct:+.1f}%")
                         st.markdown("---")
