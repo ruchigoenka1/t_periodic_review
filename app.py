@@ -3596,11 +3596,24 @@ with tab5:
                     bucket_labels.append(f"{prev_edge}+ Days")
 
                     # Generate dynamic Blue-to-Red color gradient using Plotly's RdBu_r
-                    num_buckets = len(bucket_labels)
+                    # num_buckets = len(bucket_labels)
+                    # if num_buckets == 1:
+                    #     bucket_colors = [px.colors.sample_colorscale("RdBu_r", [0.0])[0]]
+                    # else:
+                    #     bucket_colors = px.colors.sample_colorscale("RdBu_r", [i / (num_buckets - 1) for i in range(num_buckets)])
+
                     if num_buckets == 1:
-                        bucket_colors = [px.colors.sample_colorscale("RdBu_r", [0.0])[0]]
+                        bucket_colors = ["#8EC9FF"]
                     else:
-                        bucket_colors = px.colors.sample_colorscale("RdBu_r", [i / (num_buckets - 1) for i in range(num_buckets)])
+                        bucket_colors = px.colors.sample_colorscale(
+                            [
+                                [0.0, "#8EC9FF"],
+                                [0.4, "#1E88E5"],
+                                [0.7, "#FFA726"],
+                                [1.0, "#E53935"]
+                            ],
+                            [i/(num_buckets-1) for i in range(num_buckets)]
+                        )
 
                     # 2. RUN SIMULATIONS (Hidden from UI, populates downstream components)
                     with header_container:
