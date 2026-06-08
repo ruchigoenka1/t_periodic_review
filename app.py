@@ -3050,6 +3050,9 @@ with tab4:
 #                             )
 #                             st.plotly_chart(comp_fig, use_container_width=True)
 
+
+
+
 with tab5:
     st.header("⚖️ Advanced Inventory Optimization Suite")
     st.markdown(
@@ -3057,7 +3060,11 @@ with tab5:
         "to identify legacy profit leaks."
     )
     
-    import plotly.express as px # Ensure this is imported at the top of your script
+    import plotly.express as px
+    import plotly.graph_objects as go
+    import pandas as pd
+    import numpy as np
+    import scipy.stats as stats
 
     # --- 🚀 THE VECTORIZED SIMULATION ENGINE (DYNAMIC FIFO AGE BUCKETS) ---
     def fast_simulate_inventory(demand_arr, purchase_arr, opening_stock, lead_time, policy_type, param1, param2, age_bucket_edges=[30, 60, 90]):
@@ -3409,7 +3416,6 @@ with tab5:
                             empirical_rop_raw = np.percentile(rolling_risk_demand, service_level * 100)
                             safe_demand = np.where(rolling_risk_demand <= 0, 1e-5, rolling_risk_demand)
                             
-                            import scipy.stats as stats
                             log_params = stats.lognorm.fit(safe_demand, floc=0)
                             gam_params = stats.gamma.fit(safe_demand, floc=0)
 
@@ -3543,21 +3549,6 @@ with tab5:
                     st.markdown("---")
                     st.subheader("6. Policy Control & Aging Parameters")
                     
-                    # NEW COMPONENT: DYNAMIC AGE BUCKET ENGINE
-                    bucket_input = st.text_input("Define custom inventory age thresholds in days (comma-separated, e.g., '15, 30, 45, 60, 90')", value="30, 60, 90")
-                    try:
-                        custom_edges = sorted(list(set([int(x.strip()) for x in bucket_input.split(',') if x.strip().isdigit()])))
-                        if not custom_edges: custom_edges = [30, 60, 90]
-                    except:
-                        custom_edges = [30, 60, 90]
-
-                    bucket_labels = []
-                    prev_edge = 0
-                    for edge in custom_edges:
-                        bucket_labels.append(f"{prev_edge}-{edge} Days")
-                        prev_edge = edge + 1
-                    bucket_labels.append(f"{prev_edge}+ Days")
-
                     adjust_col1, adjust_col2 = st.columns(2)
                     with adjust_col1:
                         if review_system == "Continuous Review (Q, R)":
@@ -3575,21 +3566,60 @@ with tab5:
 
                     optimal_p_days = max(1, int((final_q / max(0.1, avg_daily_demand_calc)))) if review_system == "Continuous Review (Q, R)" else int(user_p_days)
 
-                    st.markdown("---")
-                    st.header("📊 Section A: Historical Backtest Audit")
-                    st.markdown("This analysis compares your **Historical Actuals** against our **Recommended Optimized Policy** under identical historical demand constraints to reveal operational friction.")
-                    
-                    # RUN HISTORICAL ACTUALS WITH DYNAMIC BUCKETS
+                    # --- UI CONTAINERS TO ENFORCE RENDERING ORDER ---
+                    header_container = st.container()
+                    kpi_container = st.container()
+                    matrix_container = st.container()
+                    timeline_container = st.container()
+                    age_input_container = st.container()
+                    age_profile_container = st.container()
+                    drilldown_container = st.container()
+
+                    # 1. Capture the age bucket definitions (renders physically in the 5th container, evaluates here logically)
+                    with age_input_container:
+                        st.markdown("---")
+                        st.markdown("### 🕰️ Inventory Age Profile (FIFO Stacked)")
+                        st.markdown("Visualize what fraction of your total inventory sitting in the warehouse belongs to distinct aging brackets over time.")
+                        bucket_input = st.text_input("Define custom inventory age thresholds in days (comma-separated, e.g., '15, 30, 45, 60, 90')", value="30, 60, 90")
+                        
+                    try:
+                        custom_edges = sorted(list(set([int(x.strip()) for x in bucket_input.split(',') if x.strip().isdigit()])))
+                        if not custom_edges: custom_edges = [30, 60, 90]
+                    except:
+                        custom_edges = [30, 60, 90]
+
+                    bucket_labels = []
+                    prev_edge = 0
+                    for edge in custom_edges:
+                        bucket_labels.append(f"{prev_edge}-{edge} Days")
+                        prev_edge = edge + 1
+                    bucket_labels.append(f"{prev_edge}+ Days")
+
+                    # Generate dynamic Blue-to-Red color gradient using Plotly's RdBu_r
+                    num_buckets = len(bucket_labels)
+                    if num_buckets == 1:
+                        bucket_colors = [px.colors.sample_colorscale("RdBu_r", [0.0])[0]]
+                    else:
+                        bucket_colors = px.colors.sample_colorscale("RdBu_r", [i / (num_buckets - 1) for i in range(num_buckets)])
+
+                    # 2. RUN SIMULATIONS (Hidden from UI, populates downstream components)
+                    with header_container:
+                        st.markdown("---")
+                        st.header("📊 Section A: Historical Backtest Audit")
+                        st.markdown("This analysis compares your **Historical Actuals** against our **Recommended Optimized Policy** under identical historical demand constraints to reveal operational friction.")
+
+                    # Actuals
                     inv_levels_act, lost_sales_act_arr, orders_placed_act_arr, avg_age_act, max_age_act, buckets_act = fast_simulate_inventory(
                         demand_arr_main, purchase_arr_main, opening_stock_override, lead_time_days, "Actual", 0, 0, custom_edges
                     )
                     
-                    # RUN OPTIMIZED POLICY WITH DYNAMIC BUCKETS
+                    # Optimized
                     inv_levels_opt, lost_sales_opt_arr, orders_placed_opt_arr, avg_age_opt, max_age_opt, buckets_opt = fast_simulate_inventory(
                         demand_arr_main, purchase_arr_main, opening_stock_override, lead_time_days, review_system, 
                         optimal_p_days if review_system != "Continuous Review (Q, R)" else final_q, final_buffer_target, custom_edges
                     )
 
+                    # --- CALCULATE METRICS ---
                     lost_sales_qty_act = lost_sales_act_arr.sum()
                     stockout_days_act = np.count_nonzero(lost_sales_act_arr)
                     zero_stock_days_act = np.count_nonzero(inv_levels_act == 0)
@@ -3605,7 +3635,6 @@ with tab5:
                     actual_total_holding_cost = actual_avg_inventory * unit_holding_cost
                     actual_lost_sales_financial = lost_sales_qty_act * lost_sales_penalty
                     actual_total_cost = actual_total_ordering_cost + actual_total_holding_cost + actual_lost_sales_financial
-                    
                     actual_overall_avg_age = np.mean(avg_age_act)
                     actual_overall_max_age = np.max(max_age_act)
 
@@ -3626,7 +3655,6 @@ with tab5:
                     optimal_holding_cost = simmed_avg_opt_inv * unit_holding_cost
                     optimal_lost_sales_financial = lost_sales_qty_opt * lost_sales_penalty
                     optimal_total_cost = optimal_ordering_cost + optimal_holding_cost + optimal_lost_sales_financial
-                    
                     opt_overall_avg_age = np.mean(avg_age_opt)
                     opt_overall_max_age = np.max(max_age_opt)
                     
@@ -3639,163 +3667,169 @@ with tab5:
                     opt_min_wc = simmed_min_inventory * item_unit_cost
 
                     true_net_benefit = actual_total_cost - optimal_total_cost
-                    
-                    if true_net_benefit > 0:
-                        st.success(f"### 🎯 The Efficiency Opportunity\nBy shifting to the recommended optimized policy, you would have recovered **${true_net_benefit:,.2f}** over this historical period.")
-                    else:
-                        st.error(f"⚠️ **Operational Margin Deficit Risk:** This setup increases operational overhead by **${abs(true_net_benefit):,.2f} / year** compared to actuals.")
 
-                    st.markdown("### 🏆 Executive Summary: Value Realization")
-                    cash_released = act_avg_wc - opt_avg_wc
+                    # 3. POPULATE UI CONTAINERS
+                    with kpi_container:
+                        if true_net_benefit > 0:
+                            st.success(f"### 🎯 The Efficiency Opportunity\nBy shifting to the recommended optimized policy, you would have recovered **${true_net_benefit:,.2f}** over this historical period.")
+                        else:
+                            st.error(f"⚠️ **Operational Margin Deficit Risk:** This setup increases operational overhead by **${abs(true_net_benefit):,.2f} / year** compared to actuals.")
 
-                    kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
-                    with kpi_col1: st.metric(label="Total Cost Saving", value=f"${true_net_benefit:,.0f}")
-                    with kpi_col2: st.metric(label="Optimized Fill Rate", value=f"{simmed_opt_fill_rate * 100:.1f}%")
-                    with kpi_col3:
-                        st.metric(label="Avg Working Capital (Opt)", value=f"${opt_avg_wc:,.0f}")
-                        st.markdown(f"<div style='margin-top: -15px; font-size: 0.85rem; color: gray;'>Historical: ${act_avg_wc:,.0f}</div>", unsafe_allow_html=True)
-                    with kpi_col4:
-                        release_label = "Cash Released" if cash_released >= 0 else "Capital Added (Tied Up)"
-                        st.metric(label=release_label, value=f"${abs(cash_released):,.0f}")
+                        st.markdown("### 🏆 Executive Summary: Value Realization")
+                        cash_released = act_avg_wc - opt_avg_wc
 
-                    st.markdown("---")
-                    
-                    def render_clustered_matrix(title, metrics, act_vals, pol_vals, formats):
-                        st.markdown(f"#### {title}")
-                        abs_var = [a - p for a, p in zip(act_vals, pol_vals)]
-                        pct_var = []
-                        for a, p in zip(act_vals, pol_vals):
-                            if a == 0: pct_var.append(0.0)
-                            else: pct_var.append(((a - p) / a) * 100)
-                            
-                        m_df = pd.DataFrame({"Operational Attribute Pillar": metrics})
-                        for idx in range(len(metrics)):
-                            fmt = formats[idx]
-                            if fmt == "currency":
-                                m_df.at[idx, "Historical Actuals"] = f"${act_vals[idx]:,.2f}"
-                                m_df.at[idx, "Optimized Policy"] = f"${pol_vals[idx]:,.2f}"
-                                m_df.at[idx, "Net Delta Variance"] = f"${abs_var[idx]:,.2f}" if abs_var[idx] >= 0 else f"-${abs(abs_var[idx]):,.2f}"
-                                m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
-                            elif fmt == "pct":
-                                m_df.at[idx, "Historical Actuals"] = f"{act_vals[idx]:.1f}%"
-                                m_df.at[idx, "Optimized Policy"] = f"{pol_vals[idx]:.1f}%"
-                                m_df.at[idx, "Net Delta Variance"] = f"{abs_var[idx]:+.1f}% pts"
-                                m_df.at[idx, "% Impact Efficiency"] = f"{pol_vals[idx] - act_vals[idx]:+.1f}% pts"
-                            elif fmt == "days":
-                                m_df.at[idx, "Historical Actuals"] = f"{act_vals[idx]:,.1f} days"
-                                m_df.at[idx, "Optimized Policy"] = f"{pol_vals[idx]:,.1f} days"
-                                m_df.at[idx, "Net Delta Variance"] = f"{abs_var[idx]:+,.1f} days"
-                                m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
-                            else:
-                                m_df.at[idx, "Historical Actuals"] = f"{int(act_vals[idx]):,}"
-                                m_df.at[idx, "Optimized Policy"] = f"{int(pol_vals[idx]):,}"
-                                m_df.at[idx, "Net Delta Variance"] = f"{int(abs_var[idx]):+1,}"
-                                m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
+                        kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+                        with kpi_col1: st.metric(label="Total Cost Saving", value=f"${true_net_benefit:,.0f}")
+                        with kpi_col2: st.metric(label="Optimized Fill Rate", value=f"{simmed_opt_fill_rate * 100:.1f}%")
+                        with kpi_col3:
+                            st.metric(label="Avg Working Capital (Opt)", value=f"${opt_avg_wc:,.0f}")
+                            st.markdown(f"<div style='margin-top: -15px; font-size: 0.85rem; color: gray;'>Historical: ${act_avg_wc:,.0f}</div>", unsafe_allow_html=True)
+                        with kpi_col4:
+                            release_label = "Cash Released" if cash_released >= 0 else "Capital Added (Tied Up)"
+                            st.metric(label=release_label, value=f"${abs(cash_released):,.0f}")
+                        st.markdown("---")
 
-                        def apply_matrix_styles(x):
-                            colors = pd.DataFrame('', index=x.index, columns=x.columns)
-                            fav = 'background-color: #1A3E2B; color: #81C784; font-weight: bold;'
-                            unfav = 'background-color: #3E1A1A; color: #E57373;'
-                            for i, metric in enumerate(metrics):
-                                v = abs_var[i]
-                                if title == "1. Financial Breakdown Matrix" or title == "3. Working Capital Release Matrix":
-                                    if v > 0: colors.iloc[i, 3:] = fav
-                                    elif v < 0: colors.iloc[i, 3:] = unfav
-                                elif title == "4. Stockout Risk & Vulnerability Matrix":
-                                    if "Fill Rate" in metric:
-                                        if pol_vals[i] > act_vals[i]: colors.iloc[i, 3:] = fav
-                                        elif pol_vals[i] < act_vals[i]: colors.iloc[i, 3:] = unfav
-                                    else:
+                    with matrix_container:
+                        def render_clustered_matrix(title, metrics, act_vals, pol_vals, formats):
+                            st.markdown(f"#### {title}")
+                            abs_var = [a - p for a, p in zip(act_vals, pol_vals)]
+                            pct_var = []
+                            for a, p in zip(act_vals, pol_vals):
+                                if a == 0: pct_var.append(0.0)
+                                else: pct_var.append(((a - p) / a) * 100)
+                                
+                            m_df = pd.DataFrame({"Operational Attribute Pillar": metrics})
+                            for idx in range(len(metrics)):
+                                fmt = formats[idx]
+                                if fmt == "currency":
+                                    m_df.at[idx, "Historical Actuals"] = f"${act_vals[idx]:,.2f}"
+                                    m_df.at[idx, "Optimized Policy"] = f"${pol_vals[idx]:,.2f}"
+                                    m_df.at[idx, "Net Delta Variance"] = f"${abs_var[idx]:,.2f}" if abs_var[idx] >= 0 else f"-${abs(abs_var[idx]):,.2f}"
+                                    m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
+                                elif fmt == "pct":
+                                    m_df.at[idx, "Historical Actuals"] = f"{act_vals[idx]:.1f}%"
+                                    m_df.at[idx, "Optimized Policy"] = f"{pol_vals[idx]:.1f}%"
+                                    m_df.at[idx, "Net Delta Variance"] = f"{abs_var[idx]:+.1f}% pts"
+                                    m_df.at[idx, "% Impact Efficiency"] = f"{pol_vals[idx] - act_vals[idx]:+.1f}% pts"
+                                elif fmt == "days":
+                                    m_df.at[idx, "Historical Actuals"] = f"{act_vals[idx]:,.1f} days"
+                                    m_df.at[idx, "Optimized Policy"] = f"{pol_vals[idx]:,.1f} days"
+                                    m_df.at[idx, "Net Delta Variance"] = f"{abs_var[idx]:+,.1f} days"
+                                    m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
+                                else:
+                                    m_df.at[idx, "Historical Actuals"] = f"{int(act_vals[idx]):,}"
+                                    m_df.at[idx, "Optimized Policy"] = f"{int(pol_vals[idx]):,}"
+                                    m_df.at[idx, "Net Delta Variance"] = f"{int(abs_var[idx]):+1,}"
+                                    m_df.at[idx, "% Impact Efficiency"] = f"{pct_var[idx]:+.1f}%"
+
+                            def apply_matrix_styles(x):
+                                colors = pd.DataFrame('', index=x.index, columns=x.columns)
+                                fav = 'background-color: #1A3E2B; color: #81C784; font-weight: bold;'
+                                unfav = 'background-color: #3E1A1A; color: #E57373;'
+                                for i, metric in enumerate(metrics):
+                                    v = abs_var[i]
+                                    if title == "1. Financial Breakdown Matrix" or title == "3. Working Capital Release Matrix":
                                         if v > 0: colors.iloc[i, 3:] = fav
                                         elif v < 0: colors.iloc[i, 3:] = unfav
-                                elif title == "5. Inventory Age & Freshness Matrix (FIFO)":
-                                    if v > 0: colors.iloc[i, 3:] = fav   
-                                    elif v < 0: colors.iloc[i, 3:] = unfav
-                            return colors
-                        st.dataframe(m_df.style.apply(apply_matrix_styles, axis=None), use_container_width=True, hide_index=True)
+                                    elif title == "4. Stockout Risk & Vulnerability Matrix":
+                                        if "Fill Rate" in metric:
+                                            if pol_vals[i] > act_vals[i]: colors.iloc[i, 3:] = fav
+                                            elif pol_vals[i] < act_vals[i]: colors.iloc[i, 3:] = unfav
+                                        else:
+                                            if v > 0: colors.iloc[i, 3:] = fav
+                                            elif v < 0: colors.iloc[i, 3:] = unfav
+                                    elif title == "5. Inventory Age & Freshness Matrix (FIFO)":
+                                        if v > 0: colors.iloc[i, 3:] = fav   
+                                        elif v < 0: colors.iloc[i, 3:] = unfav
+                                return colors
+                            st.dataframe(m_df.style.apply(apply_matrix_styles, axis=None), use_container_width=True, hide_index=True)
 
-                    render_clustered_matrix("1. Financial Breakdown Matrix", ["Annual Ordering Fees ($)", "Annual Storage Carrying Cost ($)", "Financial Penalty from Stockouts ($)", "Total Policy Operating Cost ($)"], [actual_total_ordering_cost, actual_total_holding_cost, actual_lost_sales_financial, actual_total_cost], [optimal_ordering_cost, optimal_holding_cost, optimal_lost_sales_financial, optimal_total_cost], ["currency", "currency", "currency", "currency"])
-                    render_clustered_matrix("2. Logistical Operations Footprint Matrix", ["Average Volume Kept On-Hand", "Maximum Storage Spike Level", "Total Orders Dispatched", "Average Logistics Cycle Time", "Average Order Shipment Size"], [actual_avg_inventory, actual_max_inventory, actual_orders_placed, actual_cycle_time, actual_avg_order_size], [simmed_avg_opt_inv, simmed_max_opt_inv, opt_orders_placed, policy_cycle_time, policy_avg_order_size], ["units", "units", "count", "days", "units"])
-                    render_clustered_matrix("3. Working Capital Release Matrix", ["Peak Working Capital Tied Up ($)", "Average Working Capital Tied Up ($)", "Minimum Base Working Capital ($)"], [act_max_wc, act_avg_wc, act_min_wc], [opt_max_wc, opt_avg_wc, opt_min_wc], ["currency", "currency", "currency"])
-                    render_clustered_matrix("4. Stockout Risk & Vulnerability Matrix", ["Absolute Minimum Buffer Stock", "Stockout Events (Unfulfilled Days)", "Total Unfulfilled Deficit Volume", "Days with Absolute Zero Closing Stock", "Achieved Order Fill Rate (%)"], [actual_min_inventory, stockout_days_act, lost_sales_qty_act, zero_stock_days_act, actual_fill_rate * 100], [simmed_min_inventory, stockout_days_opt, lost_sales_qty_opt, zero_stock_days_opt, simmed_opt_fill_rate * 100], ["units", "count", "units", "count", "pct"])
-                    render_clustered_matrix("5. Inventory Age & Freshness Matrix (FIFO)", ["Overall Average Inventory Age (Days)", "Maximum Peak Inventory Age (Days)"], [actual_overall_avg_age, actual_overall_max_age], [opt_overall_avg_age, opt_overall_max_age], ["days", "days"])
+                        render_clustered_matrix("1. Financial Breakdown Matrix", ["Annual Ordering Fees ($)", "Annual Storage Carrying Cost ($)", "Financial Penalty from Stockouts ($)", "Total Policy Operating Cost ($)"], [actual_total_ordering_cost, actual_total_holding_cost, actual_lost_sales_financial, actual_total_cost], [optimal_ordering_cost, optimal_holding_cost, optimal_lost_sales_financial, optimal_total_cost], ["currency", "currency", "currency", "currency"])
+                        render_clustered_matrix("2. Logistical Operations Footprint Matrix", ["Average Volume Kept On-Hand", "Maximum Storage Spike Level", "Total Orders Dispatched", "Average Logistics Cycle Time", "Average Order Shipment Size"], [actual_avg_inventory, actual_max_inventory, actual_orders_placed, actual_cycle_time, actual_avg_order_size], [simmed_avg_opt_inv, simmed_max_opt_inv, opt_orders_placed, policy_cycle_time, policy_avg_order_size], ["units", "units", "count", "days", "units"])
+                        render_clustered_matrix("3. Working Capital Release Matrix", ["Peak Working Capital Tied Up ($)", "Average Working Capital Tied Up ($)", "Minimum Base Working Capital ($)"], [act_max_wc, act_avg_wc, act_min_wc], [opt_max_wc, opt_avg_wc, opt_min_wc], ["currency", "currency", "currency"])
+                        render_clustered_matrix("4. Stockout Risk & Vulnerability Matrix", ["Absolute Minimum Buffer Stock", "Stockout Events (Unfulfilled Days)", "Total Unfulfilled Deficit Volume", "Days with Absolute Zero Closing Stock", "Achieved Order Fill Rate (%)"], [actual_min_inventory, stockout_days_act, lost_sales_qty_act, zero_stock_days_act, actual_fill_rate * 100], [simmed_min_inventory, stockout_days_opt, lost_sales_qty_opt, zero_stock_days_opt, simmed_opt_fill_rate * 100], ["units", "count", "units", "count", "pct"])
+                        render_clustered_matrix("5. Inventory Age & Freshness Matrix (FIFO)", ["Overall Average Inventory Age (Days)", "Maximum Peak Inventory Age (Days)"], [actual_overall_avg_age, actual_overall_max_age], [opt_overall_avg_age, opt_overall_max_age], ["days", "days"])
 
-                    st.markdown("---")
-                    st.markdown("### 📈 Tactical Operations Timeline Visualizations")
-                    timeline_fig = go.Figure()
-                    timeline_fig.add_trace(go.Scatter(x=df["Date"], y=inv_levels_act, name="Historical Actuals (Ledger)", line=dict(color='#B0C4DE', width=2), fill='tozeroy', fillcolor='rgba(176, 196, 222, 0.15)'))
-                    timeline_fig.add_trace(go.Scatter(x=df["Date"], y=inv_levels_opt, name=f"Recommended Optimized Policy ({best_fit_name.split(' ')[0]})", line=dict(color='#1F77B4', width=2.5)))
-                    timeline_fig.add_trace(go.Scatter(x=df["Date"], y=[max(0, raw_target_level - risk_mean)] * len(df), name="Calculated Safety Stock Floor", line=dict(color='#FF4B4B', width=1.5, dash='dot')))
-                    timeline_fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title="Timeline Date", yaxis_title="On-Hand Inventory (Units)", height=350, legend=dict(orientation="h", y=1.1, x=1, xanchor="right"))
-                    st.plotly_chart(timeline_fig, use_container_width=True)
+                    with timeline_container:
+                        st.markdown("---")
+                        st.markdown("### 📈 Tactical Operations Timeline Visualizations")
+                        timeline_fig = go.Figure()
+                        timeline_fig.add_trace(go.Scatter(x=df["Date"], y=inv_levels_act, name="Historical Actuals (Ledger)", line=dict(color='#B0C4DE', width=2), fill='tozeroy', fillcolor='rgba(176, 196, 222, 0.15)'))
+                        timeline_fig.add_trace(go.Scatter(x=df["Date"], y=inv_levels_opt, name=f"Recommended Optimized Policy ({best_fit_name.split(' ')[0]})", line=dict(color='#1F77B4', width=2.5)))
+                        timeline_fig.add_trace(go.Scatter(x=df["Date"], y=[max(0, raw_target_level - risk_mean)] * len(df), name="Calculated Safety Stock Floor", line=dict(color='#FF4B4B', width=1.5, dash='dot')))
+                        timeline_fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title="Timeline Date", yaxis_title="On-Hand Inventory (Units)", height=350, legend=dict(orientation="h", y=1.1, x=1, xanchor="right"))
+                        st.plotly_chart(timeline_fig, use_container_width=True)
 
-                    st.markdown("---")
-                    st.markdown("### 🕰️ Inventory Age Profile (FIFO Stacked)")
-                    st.markdown("Visualize what fraction of your total inventory sitting in the warehouse belongs to distinct aging brackets over time.")
-                    
-                    # Generate dynamic colors based on the number of buckets
-                    color_seq = px.colors.qualitative.Prism + px.colors.qualitative.Set1 + px.colors.qualitative.Pastel
-                    bucket_colors = [color_seq[i % len(color_seq)] for i in range(len(bucket_labels))]
-                    
-                    age_tab1, age_tab2 = st.tabs(["📉 Historical Actuals Age Profile", "⚙️ Optimized Policy Age Profile"])
-                    
-                    with age_tab1:
-                        fig_act_age = go.Figure()
-                        for j in range(len(bucket_labels)):
-                            fig_act_age.add_trace(go.Scatter(
-                                x=df["Date"], y=buckets_act[:, j], name=bucket_labels[j],
-                                mode='lines', stackgroup='one', line=dict(width=0.5, color=bucket_colors[j])
-                            ))
-                        fig_act_age.update_layout(template="plotly_white", yaxis_title="Units In Stock", xaxis_title="Date", height=350)
-                        st.plotly_chart(fig_act_age, use_container_width=True)
+                    with age_profile_container:
+                        age_tab1, age_tab2 = st.tabs(["📉 Historical Actuals Age Profile", "⚙️ Optimized Policy Age Profile"])
                         
-                    with age_tab2:
-                        fig_opt_age = go.Figure()
-                        for j in range(len(bucket_labels)):
-                            fig_opt_age.add_trace(go.Scatter(
-                                x=df["Date"], y=buckets_opt[:, j], name=bucket_labels[j],
-                                mode='lines', stackgroup='one', line=dict(width=0.5, color=bucket_colors[j])
-                            ))
-                        fig_opt_age.update_layout(template="plotly_white", yaxis_title="Units In Stock", xaxis_title="Date", height=350)
-                        st.plotly_chart(fig_opt_age, use_container_width=True)
-                        
-                    # NEW COMPONENT: POINT-IN-TIME DRILLDOWN
-                    st.markdown("---")
-                    st.markdown("### 🔍 Point-in-Time Inventory Age Drilldown")
-                    drilldown_date = st.date_input("Select specific date to inspect inventory age distribution", value=end_date, min_value=start_date, max_value=end_date)
-                    
-                    matched_row = df[df["Date"].dt.date == drilldown_date]
-                    if not matched_row.empty:
-                        idx_drill = matched_row.index[0]
-                        act_dist = buckets_act[idx_drill]
-                        opt_dist = buckets_opt[idx_drill]
-                        
-                        drill_df = pd.DataFrame({
-                            "Age Bracket": bucket_labels,
-                            "Historical Actuals (Units)": act_dist.astype(int),
-                            "Optimized Policy (Units)": opt_dist.astype(int)
-                        })
-                        
-                        col_chart, col_table = st.columns([2, 1])
-                        with col_chart:
-                            drill_fig = go.Figure()
-                            drill_fig.add_trace(go.Bar(x=bucket_labels, y=act_dist, name="Actuals", marker_color="#B0C4DE"))
-                            drill_fig.add_trace(go.Bar(x=bucket_labels, y=opt_dist, name="Optimized", marker_color="#1F77B4"))
-                            drill_fig.update_layout(barmode='group', title=f"Age Distribution on {drilldown_date}", yaxis_title="Units", template="plotly_white", margin=dict(t=40, b=20))
-                            st.plotly_chart(drill_fig, use_container_width=True)
+                        with age_tab1:
+                            fig_act_age = go.Figure()
+                            for j in range(len(bucket_labels)):
+                                fig_act_age.add_trace(go.Scatter(
+                                    x=df["Date"], y=buckets_act[:, j], name=bucket_labels[j],
+                                    mode='lines', stackgroup='one', line=dict(width=0.5, color=bucket_colors[j])
+                                ))
+                            fig_act_age.update_layout(template="plotly_white", yaxis_title="Units In Stock", xaxis_title="Date", height=350)
+                            st.plotly_chart(fig_act_age, use_container_width=True)
                             
-                        with col_table:
-                            st.markdown(f"**Exact Stock Counts:**")
-                            st.dataframe(drill_df, hide_index=True, use_container_width=True)
+                        with age_tab2:
+                            fig_opt_age = go.Figure()
+                            for j in range(len(bucket_labels)):
+                                fig_opt_age.add_trace(go.Scatter(
+                                    x=df["Date"], y=buckets_opt[:, j], name=bucket_labels[j],
+                                    mode='lines', stackgroup='one', line=dict(width=0.5, color=bucket_colors[j])
+                                ))
+                            fig_opt_age.update_layout(template="plotly_white", yaxis_title="Units In Stock", xaxis_title="Date", height=350)
+                            st.plotly_chart(fig_opt_age, use_container_width=True)
 
+                    with drilldown_container:
+                        st.markdown("---")
+                        st.markdown("### 🔍 Point-in-Time Inventory Age Drilldown")
+                        drilldown_date = st.date_input("Select specific date to inspect inventory age distribution", value=end_date, min_value=start_date, max_value=end_date)
+                        
+                        matched_row = df[df["Date"].dt.date == drilldown_date]
+                        if not matched_row.empty:
+                            idx_drill = matched_row.index[0]
+                            act_dist = buckets_act[idx_drill]
+                            opt_dist = buckets_opt[idx_drill]
+                            
+                            drill_df = pd.DataFrame({
+                                "Age Bracket": bucket_labels,
+                                "Historical Actuals (Units)": act_dist.astype(int),
+                                "Optimized Policy (Units)": opt_dist.astype(int)
+                            })
+                            
+                            col_chart, col_table = st.columns([2, 1])
+                            with col_chart:
+                                drill_fig = go.Figure()
+                                drill_fig.add_trace(go.Bar(x=bucket_labels, y=act_dist, name="Actuals", marker_color="#B0C4DE"))
+                                drill_fig.add_trace(go.Bar(x=bucket_labels, y=opt_dist, name="Optimized", marker_color="#1F77B4"))
+                                drill_fig.update_layout(barmode='group', title=f"Age Distribution on {drilldown_date}", yaxis_title="Units", template="plotly_white", margin=dict(t=40, b=20))
+                                st.plotly_chart(drill_fig, use_container_width=True)
+                                
+                            with col_table:
+                                st.markdown(f"**Exact Stock Counts:**")
+                                st.dataframe(drill_df, hide_index=True, use_container_width=True)
+
+                    # ==========================================
+                    #      SECTION B: COMPARATIVE ANALYSIS
+                    # ==========================================
                     st.markdown("---")
                     st.header("🔬 Section B: Multi-Scenario Comparative Analysis")
+                    st.markdown(
+                        "Leveraging the high-speed vectorized simulation engine, you can now backtest and compare up to 6 "
+                        "different inventory policies simultaneously. By adjusting these mechanical levers, you can easily identify "
+                        "operational blind spots without manually tracking the math."
+                    )
+                    
                     active_scenarios_list = []
                     
                     tab_cont, tab_per = st.tabs(["📉 Continuous Review (Q, R) Scenarios", "⏳ Periodic Review (P, T) Scenarios"])
                     
                     with tab_cont:
                         st.markdown(f"**Baseline Intelligence:** The data-driven optimal benchmark is **Q: {int(raw_optimal_q):,}** and **ROP: {int(raw_target_level):,}**.")
+                        
                         c1, c2, c3 = st.columns(3)
                         
                         def create_cont_box(col, num, default_q, default_r):
@@ -3804,7 +3838,14 @@ with tab5:
                                 run_c = st.toggle(f"Include C{num} in Chart", key=f"run_c{num}", value=(num==1))
                                 q_val = st.number_input("Order Qty (Q)", min_value=1, value=int(default_q), step=10, key=f"q_c{num}")
                                 r_val = st.number_input("Reorder Point (ROP)", min_value=0, value=int(default_r), step=10, key=f"r_c{num}")
-                                if run_c: active_scenarios_list.append({"Case Name": f"C{num} (Q:{q_val}, R:{r_val})", "Policy Type": "Continuous Review (Q, R)", "P1": q_val, "P2": r_val})
+                                
+                                if run_c:
+                                    active_scenarios_list.append({
+                                        "Case Name": f"C{num} (Q:{q_val}, R:{r_val})", 
+                                        "Policy Type": "Continuous Review (Q, R)", 
+                                        "P1": q_val, 
+                                        "P2": r_val
+                                    })
 
                         create_cont_box(c1, 1, raw_optimal_q, raw_target_level)
                         create_cont_box(c2, 2, raw_optimal_q * 1.5, raw_target_level)
@@ -3812,6 +3853,7 @@ with tab5:
 
                     with tab_per:
                         st.markdown("**Baseline Intelligence:** Adjust the Review Period (P) below. The engine will dynamically calculate a safe expected Target Level (T) for that exact timeframe.")
+                        
                         p1, p2, p3 = st.columns(3)
                         
                         def create_per_box(col, num, default_p):
@@ -3819,10 +3861,19 @@ with tab5:
                                 st.markdown(f"##### 🎛️ Scenario P{num}")
                                 run_p = st.toggle(f"Include P{num} in Chart", key=f"run_p{num}", value=False)
                                 p_val = st.number_input("Review Period (P Days)", min_value=1, value=int(default_p), step=1, key=f"p_p{num}")
+                                
                                 target_guide = int(raw_target_level + (avg_daily_demand_calc * p_val))
+                                
                                 t_val = st.number_input("Target Level (T)", min_value=0, value=target_guide, step=10, key=f"t_p{num}")
                                 st.caption(f"💡 *Engine recommended (T) for {p_val} days: **~{target_guide:,}***")
-                                if run_p: active_scenarios_list.append({"Case Name": f"P{num} (P:{p_val}, T:{t_val})", "Policy Type": "Periodic Review (P, T)", "P1": p_val, "P2": t_val})
+                                
+                                if run_p:
+                                    active_scenarios_list.append({
+                                        "Case Name": f"P{num} (P:{p_val}, T:{t_val})", 
+                                        "Policy Type": "Periodic Review (P, T)", 
+                                        "P1": p_val, 
+                                        "P2": t_val
+                                    })
 
                         create_per_box(p1, 1, 7)
                         create_per_box(p2, 2, 14)
@@ -3853,6 +3904,8 @@ with tab5:
                                 "Peak Age (Days)": np.max(max_age_act)
                             })
 
+                            line_colors = px.colors.qualitative.D3
+                            
                             for index, scenario in enumerate(active_scenarios_list):
                                 case_name = scenario["Case Name"]
                                 p_type = scenario["Policy Type"]
@@ -3885,7 +3938,7 @@ with tab5:
                                 
                                 comp_fig.add_trace(go.Scatter(
                                     x=df["Date"], y=s_inv, mode='lines', 
-                                    name=case_name, line=dict(color=color_seq[index % len(color_seq)], width=2.5)
+                                    name=case_name, line=dict(color=line_colors[index % len(line_colors)], width=2.5)
                                 ))
 
                             st.markdown("##### 🏆 Comparative Outcomes Scorecard")
