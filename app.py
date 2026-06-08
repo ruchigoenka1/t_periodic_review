@@ -3601,7 +3601,9 @@ with tab5:
                     #     bucket_colors = [px.colors.sample_colorscale("RdBu_r", [0.0])[0]]
                     # else:
                     #     bucket_colors = px.colors.sample_colorscale("RdBu_r", [i / (num_buckets - 1) for i in range(num_buckets)])
+                    
                     num_buckets = len(bucket_labels)
+                    
                     if num_buckets == 1:
                         bucket_colors = ["#8EC9FF"]
                     else:
