@@ -3060,11 +3060,6 @@ with tab5:
         "to identify legacy profit leaks."
     )
     
-    import plotly.express as px
-    import plotly.graph_objects as go
-    import pandas as pd
-    import numpy as np
-    import scipy.stats as stats
 
     # --- 🚀 THE VECTORIZED SIMULATION ENGINE (DYNAMIC FIFO AGE BUCKETS) ---
     def fast_simulate_inventory(demand_arr, purchase_arr, opening_stock, lead_time, policy_type, param1, param2, age_bucket_edges=[30, 60, 90]):
