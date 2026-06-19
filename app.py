@@ -27,6 +27,7 @@ st.title("🚀 Supply Chain Analytics Platform")
 game_tab, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎲 Game Simulator", "Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
 
 
+
 with game_tab:
     st.header("🎯 Bag of Balls: Game Simulator")
     st.write("Configure your game rules, set your budget, and simulate the outcomes!")
@@ -48,25 +49,27 @@ with game_tab:
         budget = st.number_input("Total Budget ($)", value=100.0, min_value=0.0, step=10.0)
         bet_size = st.number_input("Per Bet Size ($)", value=10.0, min_value=1.0, step=1.0)
 
-    # --- PLAYER CHOICE ---
+    # --- DYNAMIC BOUNDS FOR USER CHOICE ---
+    # The minimum possible sum is min_val * picks, maximum is max_val * picks
+    min_possible_sum = int(min_val * picks)
+    max_possible_sum = int(max_val * picks)
+
     st.divider()
     chosen_number = st.number_input(
-        "Choose your lucky number!", 
-        min_value=min_val, 
-        max_value=max_val, 
-        value=min_val, 
+        f"Choose your lucky target sum! (Possible range: {min_possible_sum} to {max_possible_sum})", 
+        min_value=min_possible_sum, 
+        max_value=max_possible_sum, 
+        value=min_possible_sum, 
         step=1
     )
 
     # --- SIMULATION LOGIC ---
     if st.button("🎲 Play / Simulate", use_container_width=True):
-        # Validation checks to prevent errors
+        # Validation checks to prevent system crashes
         if bet_size <= 0:
             st.error("Bet size must be greater than 0.")
         elif budget < bet_size:
             st.error("Your budget is too low to make even one bet.")
-        elif picks > (max_val - min_val + 1):
-            st.error("Number of picks cannot exceed the total number of balls in the bag.")
         elif min_val >= max_val:
             st.error("Max ball number must be strictly greater than Min ball number.")
         else:
@@ -75,19 +78,22 @@ with game_tab:
             results = []
             total_winnings = 0.0
             
-            # NEW: List to track every single ball drawn across all chances
+            # List to track every single individual ball drawn across all chances for frequency analysis
             all_drawn_balls = []
             
             # Run the simulation loop
             for i in range(chances):
-                # Draw balls without replacement
-                drawn_balls = random.sample(range(min_val, max_val + 1), picks)
+                # Draw balls WITH replacement using random.choices
+                drawn_balls = random.choices(range(min_val, max_val + 1), k=picks)
                 
-                # Add to our master list for frequency tracking
+                # Add to our master list for individual ball frequency tracking
                 all_drawn_balls.extend(drawn_balls)
                 
-                # Check for win
-                is_win = chosen_number in drawn_balls
+                # Calculate the sum of the drawn balls
+                draw_sum = sum(drawn_balls)
+                
+                # Check for win: does the chosen number match the sum?
+                is_win = (chosen_number == draw_sum)
                 win_amount = (bet_size * win_multiple) if is_win else 0.0
                 total_winnings += win_amount
                 
@@ -95,6 +101,7 @@ with game_tab:
                 results.append({
                     "Chance #": i + 1,
                     "Drawn Balls": str(drawn_balls),
+                    "Sum of Balls": draw_sum,
                     "Win?": "✅ Yes" if is_win else "❌ No",
                     "Payout ($)": win_amount
                 })
@@ -106,10 +113,10 @@ with game_tab:
             df = pd.DataFrame(results)
             st.dataframe(df, use_container_width=True)
             
-            # --- NEW: FREQUENCY TABLE ---
+            # --- FREQUENCY TABLE ---
             st.subheader("📈 Number Frequency Analysis")
             
-            # Create a dictionary to count occurrences, ensuring every ball is listed (even if 0)
+            # Create a dictionary to count occurrences of individual balls, ensuring every ball is listed
             frequency_dict = {num: 0 for num in range(min_val, max_val + 1)}
             for ball in all_drawn_balls:
                 frequency_dict[ball] += 1
@@ -120,7 +127,7 @@ with game_tab:
                 "Times Drawn": list(frequency_dict.values())
             })
             
-            # Optional: Add a percentage column for better insights
+            # Calculate total individual balls drawn across all turns
             total_balls_drawn = chances * picks
             if total_balls_drawn > 0:
                 freq_df["Draw Rate (%)"] = (freq_df["Times Drawn"] / total_balls_drawn * 100).round(2)
@@ -147,6 +154,10 @@ with game_tab:
                 st.error(f"**Net Loss:** ${abs(net_profit):.2f} 📉")
             else:
                 st.info("**Break Even!** You made back exactly what you spent. ⚖️")
+
+
+
+
 
 with tab1:
     st.header("The Basic Thumb Rule Used For Inventory Planning")
