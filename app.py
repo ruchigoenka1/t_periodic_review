@@ -10,6 +10,7 @@ import scipy.stats as stats
 from plotly.subplots import make_subplots
 import plotly.colors as pc
 import altair as alt
+import random
 
 # --- Session State Initialization ---
 if 'next_clicked' not in st.session_state:
@@ -21,11 +22,110 @@ st.set_page_config(page_title="Supply Chain Analytics Platform", layout="wide")
 
 st.title("🚀 Supply Chain Analytics Platform")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
+# tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
+
+game_tab, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎲 Game Simulator", "Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
 
 # ==========================================
 # TAB 1: AVERAGE DEMAND ANALYZER
 # ==========================================
+
+# Example of how you define your tabs
+# tab1, game_tab = st.tabs(["Main Dashboard", "🎲 Game Simulator"])
+
+# Paste everything below directly into your app script
+with game_tab:
+    st.header("🎯 Bag of Balls: Game Simulator")
+    st.write("Configure your game rules, set your budget, and simulate the outcomes!")
+
+    # --- INPUT CONFIGURATIONS ---
+    st.subheader("Game Settings")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        min_val = st.number_input("Min Ball Number", value=1, step=1)
+        max_val = st.number_input("Max Ball Number", value=5, step=1)
+        
+    with col2:
+        picks = st.number_input("Number of Picks", value=1, min_value=1, step=1)
+        win_multiple = st.number_input("Winning Multiple", value=6.0, step=0.5)
+        
+    with col3:
+        budget = st.number_input("Total Budget ($)", value=100.0, min_value=0.0, step=10.0)
+        bet_size = st.number_input("Per Bet Size ($)", value=10.0, min_value=1.0, step=1.0)
+
+    # --- PLAYER CHOICE ---
+    st.divider()
+    chosen_number = st.number_input(
+        "Choose your lucky number!", 
+        min_value=min_val, 
+        max_value=max_val, 
+        value=min_val, 
+        step=1
+    )
+
+    # --- SIMULATION LOGIC ---
+    if st.button("🎲 Play / Simulate", use_container_width=True):
+        # Validation checks to prevent errors
+        if bet_size <= 0:
+            st.error("Bet size must be greater than 0.")
+        elif budget < bet_size:
+            st.error("Your budget is too low to make even one bet.")
+        elif picks > (max_val - min_val + 1):
+            st.error("Number of picks cannot exceed the total number of balls in the bag.")
+        elif min_val >= max_val:
+            st.error("Max ball number must be strictly greater than Min ball number.")
+        else:
+            # Calculate total chances
+            chances = int(budget // bet_size)
+            results = []
+            total_winnings = 0.0
+            
+            # Run the simulation loop
+            for i in range(chances):
+                # Draw balls without replacement
+                drawn_balls = random.sample(range(min_val, max_val + 1), picks)
+                
+                # Check for win
+                is_win = chosen_number in drawn_balls
+                win_amount = (bet_size * win_multiple) if is_win else 0.0
+                total_winnings += win_amount
+                
+                # Store result for this chance
+                results.append({
+                    "Chance #": i + 1,
+                    "Drawn Balls": str(drawn_balls),
+                    "Win?": "✅ Yes" if is_win else "❌ No",
+                    "Payout ($)": win_amount
+                })
+            
+            # --- RESULTS DISPLAY ---
+            st.subheader("📊 Simulation Results")
+            
+            # 1. Display the Table
+            df = pd.DataFrame(results)
+            st.dataframe(df, use_container_width=True)
+            
+            # 2. Financial Summary
+            total_spent = chances * bet_size
+            net_profit = total_winnings - total_spent
+            
+            st.write("### Financial Summary")
+            col_res1, col_res2, col_res3 = st.columns(3)
+            
+            col_res1.metric("Total Chances Played", chances)
+            col_res2.metric("Total Amount Spent", f"${total_spent:.2f}")
+            col_res3.metric("Total Gross Winnings", f"${total_winnings:.2f}")
+            
+            # Highlight Net Profit or Loss
+            if net_profit > 0:
+                st.success(f"**Net Profit:** ${net_profit:.2f} 🤑")
+            elif net_profit < 0:
+                st.error(f"**Net Loss:** ${abs(net_profit):.2f} 📉")
+            else:
+                st.info("**Break Even!** You made back exactly what you spent. ⚖️")
+
 with tab1:
     st.header("The Basic Thumb Rule Used For Inventory Planning")
     
