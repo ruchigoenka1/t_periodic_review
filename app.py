@@ -27,7 +27,6 @@ st.title("🚀 Supply Chain Analytics Platform")
 game_tab, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎲 Game Simulator", "Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
 
 
-
 with game_tab:
     st.header("🎯 Bag of Balls: Game Simulator")
     st.write("Configure your game rules, set your budget, and simulate the outcomes!")
@@ -62,7 +61,7 @@ with game_tab:
         step=1
     )
 
-    # --- SIMULATION LOGIC ---
+    # --- SIMULATION LOGIC (VECTORIZED) ---
     if st.button("🎲 Play / Simulate", use_container_width=True):
         if bet_size <= 0:
             st.error("Bet size must be greater than 0.")
@@ -72,57 +71,53 @@ with game_tab:
             st.error("Max ball number must be strictly greater than Min ball number.")
         else:
             chances = int(budget // bet_size)
-            results = []
-            total_winnings = 0.0
             
-            # NEW: Track the SUM of each turn instead of individual balls
-            all_drawn_sums = []
+            # 1. Vectorized Drawing: Generate a matrix of ALL drawn balls at once
+            # Shape: (chances, picks). e.g., 10 chances of 2 picks = 10x2 matrix
+            drawn_matrix = np.random.choice(np.arange(min_val, max_val + 1), size=(chances, picks))
             
-            # Run the simulation loop
-            for i in range(chances):
-                drawn_balls = random.choices(range(min_val, max_val + 1), k=picks)
-                draw_sum = sum(drawn_balls)
-                
-                # Add the sum to our master list for frequency tracking
-                all_drawn_sums.append(draw_sum)
-                
-                # Check for win
-                is_win = (chosen_number == draw_sum)
-                win_amount = (bet_size * win_multiple) if is_win else 0.0
-                total_winnings += win_amount
-                
-                results.append({
-                    "Chance #": i + 1,
-                    "Drawn Balls": str(drawn_balls),
-                    "Sum of Balls": draw_sum,
-                    "Win?": "✅ Yes" if is_win else "❌ No",
-                    "Payout ($)": win_amount
-                })
+            # 2. Vectorized Sum: Sum across the rows (axis=1)
+            sums_array = np.sum(drawn_matrix, axis=1)
+            
+            # 3. Vectorized Win Checking
+            wins_array = (sums_array == chosen_number)
+            
+            # 4. Vectorized Payouts
+            payouts_array = np.where(wins_array, bet_size * win_multiple, 0.0)
+            
+            # Calculate total winnings instantly
+            total_winnings = float(np.sum(payouts_array))
             
             # --- RESULTS DISPLAY ---
             st.subheader("📊 Simulation Results")
             
-            df = pd.DataFrame(results)
-            st.dataframe(df, use_container_width=True)
-            
-            # --- UPDATED FREQUENCY TABLE ---
-            st.subheader("📈 Sum Frequency Analysis")
-            
-            # Create a dictionary for every possible sum
-            frequency_dict = {num: 0 for num in range(min_possible_sum, max_possible_sum + 1)}
-            for s in all_drawn_sums:
-                frequency_dict[s] += 1
-                
-            freq_df = pd.DataFrame({
-                "Sum of Balls": list(frequency_dict.keys()),
-                "Times Drawn": list(frequency_dict.values())
+            # Build DataFrame quickly from NumPy arrays
+            df = pd.DataFrame({
+                "Chance #": np.arange(1, chances + 1),
+                "Drawn Balls": [str(list(row)) for row in drawn_matrix], # String formatting needs a quick loop
+                "Sum of Balls": sums_array,
+                "Win?": np.where(wins_array, "✅ Yes", "❌ No"),
+                "Payout ($)": payouts_array
             })
             
-            # Calculate Draw Rate (%) based on total chances (1 chance = 1 sum)
-            if chances > 0:
-                freq_df["Draw Rate (%)"] = (freq_df["Times Drawn"] / chances * 100).round(2)
+            st.dataframe(df, use_container_width=True)
             
-            st.dataframe(freq_df, use_container_width=True)
+            # --- UPDATED FREQUENCY TABLE (PANDAS VECTORIZED) ---
+            st.subheader("📈 Sum Frequency Analysis")
+            
+            # Count frequencies using Pandas value_counts
+            sum_counts = pd.Series(sums_array).value_counts()
+            
+            # Ensure all possible sums are represented, even if 0
+            all_possible_sums = pd.Index(range(min_possible_sum, max_possible_sum + 1), name="Sum of Balls")
+            sum_counts = sum_counts.reindex(all_possible_sums, fill_value=0).reset_index()
+            sum_counts.columns = ["Sum of Balls", "Times Drawn"]
+            
+            # Vectorized Percentage Math
+            if chances > 0:
+                sum_counts["Draw Rate (%)"] = (sum_counts["Times Drawn"] / chances * 100).round(2)
+            
+            st.dataframe(sum_counts, use_container_width=True)
             
             # --- FINANCIAL SUMMARY ---
             st.divider()
@@ -142,8 +137,6 @@ with game_tab:
                 st.error(f"**Net Loss:** ${abs(net_profit):.2f} 📉")
             else:
                 st.info("**Break Even!** You made back exactly what you spent. ⚖️")
-
-
 
 
 
