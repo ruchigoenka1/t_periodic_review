@@ -50,7 +50,6 @@ with game_tab:
         bet_size = st.number_input("Per Bet Size ($)", value=10.0, min_value=1.0, step=1.0)
 
     # --- DYNAMIC BOUNDS FOR USER CHOICE ---
-    # The minimum possible sum is min_val * picks, maximum is max_val * picks
     min_possible_sum = int(min_val * picks)
     max_possible_sum = int(max_val * picks)
 
@@ -65,7 +64,6 @@ with game_tab:
 
     # --- SIMULATION LOGIC ---
     if st.button("🎲 Play / Simulate", use_container_width=True):
-        # Validation checks to prevent system crashes
         if bet_size <= 0:
             st.error("Bet size must be greater than 0.")
         elif budget < bet_size:
@@ -73,31 +71,26 @@ with game_tab:
         elif min_val >= max_val:
             st.error("Max ball number must be strictly greater than Min ball number.")
         else:
-            # Calculate total chances
             chances = int(budget // bet_size)
             results = []
             total_winnings = 0.0
             
-            # List to track every single individual ball drawn across all chances for frequency analysis
-            all_drawn_balls = []
+            # NEW: Track the SUM of each turn instead of individual balls
+            all_drawn_sums = []
             
             # Run the simulation loop
             for i in range(chances):
-                # Draw balls WITH replacement using random.choices
                 drawn_balls = random.choices(range(min_val, max_val + 1), k=picks)
-                
-                # Add to our master list for individual ball frequency tracking
-                all_drawn_balls.extend(drawn_balls)
-                
-                # Calculate the sum of the drawn balls
                 draw_sum = sum(drawn_balls)
                 
-                # Check for win: does the chosen number match the sum?
+                # Add the sum to our master list for frequency tracking
+                all_drawn_sums.append(draw_sum)
+                
+                # Check for win
                 is_win = (chosen_number == draw_sum)
                 win_amount = (bet_size * win_multiple) if is_win else 0.0
                 total_winnings += win_amount
                 
-                # Store result for this chance
                 results.append({
                     "Chance #": i + 1,
                     "Drawn Balls": str(drawn_balls),
@@ -109,33 +102,29 @@ with game_tab:
             # --- RESULTS DISPLAY ---
             st.subheader("📊 Simulation Results")
             
-            # 1. Display the Main Simulation Table
             df = pd.DataFrame(results)
             st.dataframe(df, use_container_width=True)
             
-            # --- FREQUENCY TABLE ---
-            st.subheader("📈 Number Frequency Analysis")
+            # --- UPDATED FREQUENCY TABLE ---
+            st.subheader("📈 Sum Frequency Analysis")
             
-            # Create a dictionary to count occurrences of individual balls, ensuring every ball is listed
-            frequency_dict = {num: 0 for num in range(min_val, max_val + 1)}
-            for ball in all_drawn_balls:
-                frequency_dict[ball] += 1
+            # Create a dictionary for every possible sum
+            frequency_dict = {num: 0 for num in range(min_possible_sum, max_possible_sum + 1)}
+            for s in all_drawn_sums:
+                frequency_dict[s] += 1
                 
-            # Convert to DataFrame
             freq_df = pd.DataFrame({
-                "Ball Number": list(frequency_dict.keys()),
+                "Sum of Balls": list(frequency_dict.keys()),
                 "Times Drawn": list(frequency_dict.values())
             })
             
-            # Calculate total individual balls drawn across all turns
-            total_balls_drawn = chances * picks
-            if total_balls_drawn > 0:
-                freq_df["Draw Rate (%)"] = (freq_df["Times Drawn"] / total_balls_drawn * 100).round(2)
+            # Calculate Draw Rate (%) based on total chances (1 chance = 1 sum)
+            if chances > 0:
+                freq_df["Draw Rate (%)"] = (freq_df["Times Drawn"] / chances * 100).round(2)
             
-            # Display the frequency table
             st.dataframe(freq_df, use_container_width=True)
             
-            # 2. Financial Summary
+            # --- FINANCIAL SUMMARY ---
             st.divider()
             st.write("### 💰 Financial Summary")
             
@@ -147,7 +136,6 @@ with game_tab:
             col_res2.metric("Total Amount Spent", f"${total_spent:.2f}")
             col_res3.metric("Total Gross Winnings", f"${total_winnings:.2f}")
             
-            # Highlight Net Profit or Loss
             if net_profit > 0:
                 st.success(f"**Net Profit:** ${net_profit:.2f} 🤑")
             elif net_profit < 0:
