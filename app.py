@@ -26,14 +26,7 @@ st.title("🚀 Supply Chain Analytics Platform")
 
 game_tab, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎲 Game Simulator", "Average Demand", "📊 Demand Analyzer and Histogram", "Continuous Review", "🔄 Periodic Review", "Inventory Audit", "Multi SKU Simulator"])
 
-# ==========================================
-# TAB 1: AVERAGE DEMAND ANALYZER
-# ==========================================
 
-# Example of how you define your tabs
-# tab1, game_tab = st.tabs(["Main Dashboard", "🎲 Game Simulator"])
-
-# Paste everything below directly into your app script
 with game_tab:
     st.header("🎯 Bag of Balls: Game Simulator")
     st.write("Configure your game rules, set your budget, and simulate the outcomes!")
@@ -82,10 +75,16 @@ with game_tab:
             results = []
             total_winnings = 0.0
             
+            # NEW: List to track every single ball drawn across all chances
+            all_drawn_balls = []
+            
             # Run the simulation loop
             for i in range(chances):
                 # Draw balls without replacement
                 drawn_balls = random.sample(range(min_val, max_val + 1), picks)
+                
+                # Add to our master list for frequency tracking
+                all_drawn_balls.extend(drawn_balls)
                 
                 # Check for win
                 is_win = chosen_number in drawn_balls
@@ -103,17 +102,40 @@ with game_tab:
             # --- RESULTS DISPLAY ---
             st.subheader("📊 Simulation Results")
             
-            # 1. Display the Table
+            # 1. Display the Main Simulation Table
             df = pd.DataFrame(results)
             st.dataframe(df, use_container_width=True)
             
+            # --- NEW: FREQUENCY TABLE ---
+            st.subheader("📈 Number Frequency Analysis")
+            
+            # Create a dictionary to count occurrences, ensuring every ball is listed (even if 0)
+            frequency_dict = {num: 0 for num in range(min_val, max_val + 1)}
+            for ball in all_drawn_balls:
+                frequency_dict[ball] += 1
+                
+            # Convert to DataFrame
+            freq_df = pd.DataFrame({
+                "Ball Number": list(frequency_dict.keys()),
+                "Times Drawn": list(frequency_dict.values())
+            })
+            
+            # Optional: Add a percentage column for better insights
+            total_balls_drawn = chances * picks
+            if total_balls_drawn > 0:
+                freq_df["Draw Rate (%)"] = (freq_df["Times Drawn"] / total_balls_drawn * 100).round(2)
+            
+            # Display the frequency table
+            st.dataframe(freq_df, use_container_width=True)
+            
             # 2. Financial Summary
+            st.divider()
+            st.write("### 💰 Financial Summary")
+            
             total_spent = chances * bet_size
             net_profit = total_winnings - total_spent
             
-            st.write("### Financial Summary")
             col_res1, col_res2, col_res3 = st.columns(3)
-            
             col_res1.metric("Total Chances Played", chances)
             col_res2.metric("Total Amount Spent", f"${total_spent:.2f}")
             col_res3.metric("Total Gross Winnings", f"${total_winnings:.2f}")
